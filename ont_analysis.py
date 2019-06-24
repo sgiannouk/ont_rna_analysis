@@ -67,33 +67,47 @@ def quality_control():
 	return
 
 def preprocessing_raw_data():
-	
+	if not os.path.exists(prepr_dir): os.makedirs(prepr_dir)
+	raw_data = [sum_file for sum_file in glob.glob(os.path.join(raw_data_dir, "fastq_pass/*.fastq.gz"))]	
+
+	for file in raw_data[0:2]:
+		file_name = os.path.basename(file.split(".")[0]) 
+		porechop = " ".join([
+		"porechop",  # Call porechop to trim adapters
+		"--threads", str(args.threads),  # Number of threads to be used by the script
+		"--format fastq.gz",  # Output as compressed fastq files
+		"--input", file,  # FASTQ of input reads
+		"--output", os.path.join(prepr_dir, "{0}.tr.fastq.gz".format(file_name)),  # Filename for FASTQ of trimmed reads
+		"--verbosity 2",  # Level of progress information
+		"2>>", os.path.join(reports_dir, "porechop_report.txt")])
+		subprocess.run(porechop, shell=True)
 	return
 
-def alignment_against_ref_genome():
+def alignment_against_ref():
 	if not os.path.exists(alignments_dir): os.makedirs(alignments_dir)
 
 	raw_data = [sum_file for sum_file in glob.glob(os.path.join(raw_data_dir, "fastq_pass/*.fastq.gz"))]
 	sample_id = raw_data_dir.split("/")[4].split("_")[-1]
 
-	for files in raw_data[0:2]:
+	for files in raw_data[0:1]:
 		file_name = os.path.basename(files.split(".")[0])
 		minimap2_genome = " ".join([
 		"~/playground/progs/minimap2-2.17_x64-linux/minimap2",  # Call minimap2 (v2.17-r941)
 		"-t", str(args.threads),  # Number of threds to use
-		"-x map-ont",   #  Oxford Nanopore to reference mapping (-k15) and output in SAM format (-a)
-		"--splice",  # Enable the splice alignment mode
-		"-N 0",  # Output at most 10 secondary alignments
-		"-o", os.path.join(alignments_dir, os.path.basename(files).replace(".fastq.gz", "_genome.paf")),
+		"-ax splice",   # Long-read spliced alignment mode and output in SAM format (-a)
+		"-k 14",  # Output at most 10 secondary alignments
+		"-uf",  # Find canonical splicing sites GT-AG - f: transcript strand
+		"--secondary=no",
+		"-o", os.path.join(alignments_dir, "{0}.genome.paf".format(file_name)),
 		refGenomeGRCh38,  # Inputting the reference genome
 		files,  # Input .fastq.gz file
-		# "|", "samtools view",  # Calling 'samtools view' to compress the Bowtie's output file to BAM
-  # 		"--threads", str(args.threads),  # Number of threads to be used by Samtools in the conversion of the SAM files to BAM
-  # 		"-S -u1",  # Input format is auto-detected, the output file should be in BAM format, and use fast compression
-  # 		"-",  # Piping the input file
-  # 		"|", "samtools sort",  # Calling 'samtools sort' to sort the output alignment file
-  # 		"--threads", str(args.threads),  # Number of threads to be used by 'samtools sort'
-  # 		"-o", os.path.join(alignments_dir, os.path.basename(files).replace(".fastq.gz", ".bam")), "-",  # Sorted output  BAM file
+		"|", "samtools view",  # Calling 'samtools view' to compress the Bowtie's output file to BAM
+  		"--threads", str(args.threads),  # Number of threads to be used by Samtools in the conversion of the SAM files to BAM
+  		"-S -u1",  # Input format is auto-detected, the output file should be in BAM format, and use fast compression
+  		"-",  # Piping the input file
+  		"|", "samtools sort",  # Calling 'samtools sort' to sort the output alignment file
+  		"--threads", str(args.threads),  # Number of threads to be used by 'samtools sort'
+  		"-o", os.path.join(alignments_dir, "{0}.genome.bam".format(file_name)), "-",  # Sorted output  BAM file
 		"2>>", os.path.join(reports_dir, "minimap2_genome_report.txt")])  # Directory where all FastQC and Cutadapt reports reside
 		subprocess.run(minimap2_genome, shell=True)
 
@@ -101,16 +115,50 @@ def alignment_against_ref_genome():
 		minimap2_transcriptome = " ".join([
 		"~/playground/progs/minimap2-2.17_x64-linux/minimap2",  # Call minimap2 (v2.17-r941)
 		"-t", str(args.threads),  # Number of threds to use
-		"-x map-ont",   #  Oxford Nanopore to reference mapping (-k15) and output in SAM format (-a)
-		"-N 0",  # Output at most 10 secondary alignments
-		"-o", os.path.join(alignments_dir, os.path.basename(files).replace(".fastq.gz", "_transcriptome.paf")),
+		"-ax splice",   # Long-read spliced alignment mode and output in SAM format (-a)
+		"--splice-flank=no",  # Enable the splice alignment mode
+		"--secondary=no",  # Higher junction accuracy
+		"-o", os.path.join(alignments_dir, "{0}._transcriptome.paf".format(file_name)),
 		refTranscGRCh38,  # Inputting the reference genome
 		files,  # Input .fastq.gz file
+		"|", "samtools view",  # Calling 'samtools view' to compress the Bowtie's output file to BAM
+  		"--threads", str(args.threads),  # Number of threads to be used by Samtools in the conversion of the SAM files to BAM
+  		"-S -u1",  # Input format is auto-detected, the output file should be in BAM format, and use fast compression
+  		"-",  # Piping the input file
+  		"|", "samtools sort",  # Calling 'samtools sort' to sort the output alignment file
+  		"--threads", str(args.threads),  # Number of threads to be used by 'samtools sort'
+  		"-o", os.path.join(alignments_dir, "{0}.transcriptome.bam".format(file_name)), "-",  # Sorted output  BAM file
 		"2>>", os.path.join(reports_dir, "minimap2_transcriptome_report.txt")])  # Directory where all FastQC and Cutadapt reports reside
 		subprocess.run(minimap2_transcriptome, shell=True)
+	return
 
+def mapping_qc():
 
- 
+	genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
+	nanoPlot_gn = " ".join([
+	"NanoPlot",  # Call pycoQC
+	"--threads", str(args.threads),  # Number of threads to be used by the script
+	"--bam", genome_alignments,  # Input bam files
+	"--color saddlebrown",  # Color for the plots
+	"--colormap PuBuGn",  # Colormap for the heatmap
+	"--prefix", os.path.join(reports_dir, "{0}_".format(sample_id)),  # Create the report in the reports directory
+	"--format png",  # Output format of the plots
+	"--dpi 900", # Set the dpi for saving images in high resolution
+	"2>>", os.path.join(reports_dir, "nanoPlot_gnQC_alignment_report.txt")])
+	# subprocess.run(nanoPlot_gn, shell=True)
+	
+	# transcriptome_alignments = " ".join([sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.transcriptome.bam"))])
+	# nanoPlot_tr = " ".join([
+	# "NanoPlot",  # Call pycoQC
+	# "--threads", str(args.threads),  # Number of threads to be used by the script
+	# "--bam", transcriptome_alignments,  # Input bam files
+	# "--color saddlebrown",  # Color for the plots
+	# "--colormap PuBuGn",  # Colormap for the heatmap
+	# "--prefix", os.path.join(reports_dir, "{0}_".format(sample_id)),  # Create the report in the reports directory
+	# "--format png",  # Output format of the plots
+	# "--dpi 900", # Set the dpi for saving images in high resolution
+	# "2>>", os.path.join(reports_dir, "nanoPlot_trQC_alignment_report.txt")])
+	# subprocess.run(nanoPlot_tr, shell=True)
 	return
 
 def main():
@@ -119,6 +167,8 @@ def main():
 
 	# preprocessing_raw_data()
 
-	alignment_against_ref_genome()
+	alignment_against_ref()
+
+	# mapping_qc()
 
 if __name__ == "__main__": main()
