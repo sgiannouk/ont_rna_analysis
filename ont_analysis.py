@@ -103,7 +103,7 @@ def alignment_against_ref(i, sample_id, raw_data_dir):
 	"|", "samtools sort",  # Calling 'samtools sort' to sort the output alignment file
 	"--threads", args.threads,  # Number of threads to be used by 'samtools sort'
 	"--output-fmt BAM",  # Output in BAM format
-	"-o", os.path.join(alignments_dir, "{0}.{1}.genome.bam".format(sample_id, file_name)),  # Sorted output  BAM file
+	"-o", os.path.join(alignments_dir, "{0}.{1}.genome.bam".format(sample_id, file_name.split("_")[0])),  # Sorted output  BAM file
 	"2>>", os.path.join(reports_dir, "minimap2_genome-report.txt")])  # Directory where all FastQC and Cutadapt reports reside
 	subprocess.run(minimap2_genome, shell=True)
 
@@ -126,7 +126,7 @@ def alignment_against_ref(i, sample_id, raw_data_dir):
 	"|", "samtools sort",  # Calling 'samtools sort' to sort the output alignment file
 	"--threads", args.threads,  # Number of threads to be used by 'samtools sort'
 	"--output-fmt BAM",  # Output in BAM format
-	"-o", os.path.join(alignments_dir, "{0}.{1}.transcriptome.bam".format(sample_id, file_name)), "-",  # Sorted output  BAM file
+	"-o", os.path.join(alignments_dir, "{0}.{1}.transcriptome.bam".format(sample_id, file_name.split("_")[0])), "-",  # Sorted output  BAM file
 	"2>>", os.path.join(reports_dir, "minimap2_transcriptome-report.txt")])  # Directory where all FastQC and Cutadapt reports reside
 	subprocess.run(minimap2_transcriptome, shell=True)
 	return
