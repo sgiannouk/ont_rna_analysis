@@ -178,7 +178,7 @@ def mapping_qc():
 		"> {0}/{1}.{2}.alignment_qc.txt".format(postanalysis_dir, file_name, aligned_to),  # Output file
 		"2>>", os.path.join(postanalysis_dir, "{0}_{1}_alignment_qc-report.txt".format(file_name, aligned_to))])
 		subprocess.run(alignment_qc, shell=True)
-		os.system('rm {0}/{1}.{2}.bam_alignment_qc.pk'.format(postanalysis_dir, file_name, aligned_to))
+
 
 		### GENOME ALIGNMENTS STATS 
 		if file.endswith(".genome.bam"):
@@ -282,6 +282,16 @@ def summary(num_of_files):
 	"2>>", os.path.join(postanalysis_dir, "post-alignment_multiQC-report.txt")])  # Output multiQC report
 	subprocess.run(multiQC, shell=True)
 
+	pickle_files = [pk_file for pk_file in glob.glob(os.path.join(postanalysis_dir, "*_qc.pk"))]
+	# Wub Compare alignment QC statistics of multiple samples
+	bam_multi_qc = ' '.join([
+	"bam_multi_qc.py",
+	"-r", "{0}/{1}.{2}.bam_alignment_qc.pdf".format(postanalysis_dir, file_name, aligned_to),  # Output pdf file
+	' '.join(pickle_files),
+	"> {0}/{1}.{2}.bam_multi_qc.txt".format(postanalysis_dir, file_name, aligned_to),  # Output file
+	"2>>", os.path.join(postanalysis_dir, "{0}_{1}_bam_multi_qc-report.txt".format(file_name, aligned_to))])
+	subprocess.run(bam_multi_qc, shell=True)
+
 	## Cleaning up reports folder
 	figures_pre_dir = os.path.join(reports_dir, "figures")
 	if not os.path.exists(figures_pre_dir): os.makedirs(figures_pre_dir)
@@ -313,6 +323,7 @@ def summary(num_of_files):
 	if not os.path.exists(qc_reports): os.makedirs(qc_reports)
 
 	# Moving files to "qc_reports" directory
+	os.system('mv {0}/*alignment_qc.pk {1}'.format(postanalysis_dir, qc_reports))
 	os.system('mv {0}/*log* {1}'.format(current_dir, qc_reports))
 	os.system('mv {0}/*.fragSize {1}'.format(postanalysis_dir, qc_reports))
 	os.system('mv {0}/*sum.* {1}'.format(postanalysis_dir, qc_reports))
