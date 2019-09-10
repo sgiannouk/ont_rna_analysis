@@ -21,7 +21,7 @@ description = "DESCRIPTION"
 
 parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, usage=usage, description=description, epilog=epilog)
 # Number of threads/CPUs to be used
-parser.add_argument('-th', '--threads', dest='threads', default=str(10), metavar='', 
+parser.add_argument('-th', '--threads', dest='threads', default=str(30), metavar='', 
                 	help="Number of threads to be used in the analysis")
 # Display the version of the pipeline 
 parser.add_argument('-v', '--version', action='version', version='%(prog)s {0}'.format(__version__))
@@ -31,11 +31,11 @@ args = parser.parse_args()
 current_dir = os.getcwd()
 
 # Main folder hosting the analysis
-analysis_dir = os.path.join(current_dir, "analysis_TEST_FINAL")
+analysis_dir = os.path.join(current_dir, "ont_data_analysis")
 prepr_dir = os.path.join(analysis_dir, "preprocessed_data")
 alignments_dir = os.path.join(analysis_dir, "alignments")
-reports_dir = os.path.join(analysis_dir, "reports")
-postanalysis_dir = os.path.join(analysis_dir, "postanalysis")
+reports_dir = os.path.join(analysis_dir, "pre-analysis")
+postanalysis_dir = os.path.join(analysis_dir, "post-analysis")
 
 
 
@@ -85,7 +85,7 @@ def preprocessing_raw_data(raw_data_dir):
 def alignment_against_ref(i, sample_id, raw_data_dir):
 	if not os.path.exists(alignments_dir): os.makedirs(alignments_dir)
 
-	dataset = [sum_file for sum_file in glob.glob(os.path.join(raw_data_dir, "fastq_pass_file/*test.fastq.gz"))][0]
+	dataset = [sum_file for sum_file in glob.glob(os.path.join(raw_data_dir, "fastq_pass_file/*fastq.gz"))][0]
 	file_name = os.path.basename(dataset.split(".")[0])
 
 	### ALIGN THE RAW READS AGAINST THE REFERENCE GENOME
