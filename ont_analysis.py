@@ -5,10 +5,13 @@ __version__ = "0.1.4"
 
 import argparse
 import subprocess
+import numpy as np
 from pathlib import Path
 import shutil, time, glob, sys, os, re
 
 ont_data =  "/shared/projects/silvia_ont_umc/"
+
+# test_annotation = "/home/stavros/playground/ont_rna_analysis/test_new_annotation.gtf"
 
 refGenomeGRCh38 = "/home/stavros/references/reference_genome/GRCh38_GencodeV31_primAssembly/GRCh38.primary_assembly.genome.fa"
 refTranscGRCh38 = "/home/stavros/references/reference_transcriptome/ensembl_cdna_ncrna/GRCh38_cdna_ncrna.fasta"
@@ -168,6 +171,7 @@ def mapping_qc():
 		subprocess.run(CollectAlignmentSummaryMetrics, shell=True) 
 
 		# Wub Alignment based QC plots
+		print(">>> WUB - Alignment based QC plots: in progress ..")
 		alignment_qc = ' '.join([
 		"bam_alignment_qc.py",
 		"-f", ref_file,  # Input reference file
@@ -175,10 +179,8 @@ def mapping_qc():
 		"-r", "{0}/{1}.{2}.bam_alignment_qc.pdf".format(postanalysis_dir, file_name, aligned_to),  # Output pdf file
 		"-p", "{0}/{1}.{2}.bam_alignment_qc.pk".format(postanalysis_dir, file_name, aligned_to),  # Output pk file
 		file,
-		"> {0}/{1}.{2}.alignment_qc.txt".format(postanalysis_dir, file_name, aligned_to),  # Output file
 		"2>>", os.path.join(postanalysis_dir, "{0}_{1}_alignment_qc-report.txt".format(file_name, aligned_to))])
 		subprocess.run(alignment_qc, shell=True)
-
 
 		### GENOME ALIGNMENTS STATS 
 		if file.endswith(".genome.bam"):
@@ -234,10 +236,10 @@ def mapping_qc():
 			subprocess.run(mapping_pos, shell=True)
 	return
 
-def generate_expression_matrices():
+def generate_expression_matrices(num_of_samples):
 	
 	genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
-	print("FeatureCounts - Counting reads from the genome aligned data: in progress ..")
+	# print("FeatureCounts - Counting reads from the genome aligned data: in progress ..")
 	featureCounts_gn = " ".join([
 	"featureCounts",  # Call featureCounts
 	"-T", args.threads,  # Number of threads to be used by the script
@@ -251,24 +253,41 @@ def generate_expression_matrices():
 	print("Exporting the (genomic) expression matrix: in progress ..")
 	subprocess.run("cut -f1,7- {0}/genome_alignments_sum.tab | sed 1d > {0}/featureCounts_expression_matrix.txt".format(postanalysis_dir), shell=True)
 
-	# transcriptome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.transcriptome.bam"))]
-	# print("Cufflinks - Counting reads from the transcriptome aligned data: in progress ..")
-	# for file in transcriptome_alignments:
-	# 	file_name = os.path.basename(files.split(".")[0])
-	# 	cufflinks = " ".join([
-	# 	"cufflinks",  # Call pycoQC
-	# 	"--num-threads", args.threads,  # Number of threads to be used by the script
-	# 	"--output-dir", os.path.join(postanalysis_dir, file_name),  # Output directory
-	# 	"--GTF", refAnnot,  # Annotation file in GTF format
-	# 	file,
-	# 	# "2>>", os.path.join(reports_dir, "cufflinks_transcriptome_summary-report.txt")
-	# 	])
-	# 	# subprocess.run(cufflinks, shell=True)
+	annot = {}
+	with open(refAnnot) as ref_in:
+		for i, line in enumerate(ref_in):
+			if not line.startswith("#"):
+				gene_id = line.split("\t")[-1].split(";")[0].split(" ")[-1].strip("\"")
+				gene_type = [line.split("\t")[-1].split(";")[1].split()[1].strip("\"").strip() ,line.split("\t")[-1].split(";")[2].split()[1].strip("\"").strip()] [line.split("\t")[-1].split(";")[2].split()[0].strip()=="gene_type"]
+				annot[gene_id] = gene_type
+
 	
-	# print("Exporting the (transcriptomic) expression matrix: in progress ..")
-	# subprocess.run("ls {0}/*.gtf > {0}/cufflinks_outputs.txt".format(postanalysis_dir), shell=True)
-	# subprocess.run("cuffmerge --num-threads {0} --ref-gtf {1} --ref-sequence {2} -o {3} {3}/cufflinks_outputs.txt"\
-	# 							   .format(args.threads, refAnnot, refGenomeGRCh38, postanalysis_dir), shell=True)
+	data = {}
+	header = []
+	with open("{0}/featureCounts_expression_matrix.txt".format(postanalysis_dir)) as mat_in:
+		for i, line in enumerate(mat_in, 1):
+			if i == 1:
+				header = line.split()
+
+			else:
+				gene = line.strip().split()[0]
+				values = line.strip().split()[1:]
+				if not sum(map(int, values)) == 0:
+					if annot[gene].endswith("pseudogene"):
+						data[(gene, "pseudogene")] = values
+					else:
+						data[(gene, annot[gene])] = values
+
+	# Remove paths from sample names
+	header = [elm.split("/")[-1] for elm in header]
+	header.insert(1, "gene_type")  # Inserting gene_type in header
+	header[0] = "gene_id"  # Replacing Geneid with gene_id in header
+
+	# Writing output to file 'expression_matrix.csv'
+	with open("{0}/expression_matrix.csv".format(postanalysis_dir), "a") as fout:
+		fout.write("{0}\n".format(','.join(header)))
+		for key, values in data.items():
+			fout.write("{0},{1}\n".format(','.join(key), ','.join(values)))
 	return
 
 def summary(num_of_files):
@@ -288,7 +307,6 @@ def summary(num_of_files):
 	"bam_multi_qc.py",
 	"-r", "{0}/{1}.{2}.bam_alignment_qc.pdf".format(postanalysis_dir, file_name, aligned_to),  # Output pdf file
 	' '.join(pickle_files),
-	"> {0}/{1}.{2}.bam_multi_qc.txt".format(postanalysis_dir, file_name, aligned_to),  # Output file
 	"2>>", os.path.join(postanalysis_dir, "{0}_{1}_bam_multi_qc-report.txt".format(file_name, aligned_to))])
 	subprocess.run(bam_multi_qc, shell=True)
 
@@ -336,7 +354,8 @@ def summary(num_of_files):
 def main():
 	
 	summary_files = [file_path for file_path in Path(ont_data).glob('**/*_sequencing_summary.txt')]
-
+	num_of_samples = len(summary_files)
+	
 	for i, sum_file in enumerate(summary_files, 1):
 		sample_id = sum_file.parts[4].split("_")[-1]
 		raw_data_dir = str(sum_file.parents[1])
@@ -348,8 +367,8 @@ def main():
 
 	mapping_qc()
 
-	generate_expression_matrices()
+	generate_expression_matrices(num_of_samples)
 
-	summary(len(summary_files))
+	summary(num_of_samples)
 
 if __name__ == "__main__": main()
