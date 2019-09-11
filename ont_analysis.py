@@ -1,7 +1,7 @@
 ###Stavros Giannoukakos### 
 
 #Version of the program
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 import argparse
 import subprocess
@@ -10,8 +10,6 @@ from pathlib import Path
 import shutil, time, glob, sys, os, re
 
 ont_data =  "/shared/projects/silvia_ont_umc/"
-
-# test_annotation = "/home/stavros/playground/ont_rna_analysis/test_new_annotation.gtf"
 
 refGenomeGRCh38 = "/home/stavros/references/reference_genome/GRCh38_GencodeV31_primAssembly/GRCh38.primary_assembly.genome.fa"
 refTranscGRCh38 = "/home/stavros/references/reference_transcriptome/ensembl_cdna_ncrna/GRCh38_cdna_ncrna.fasta"
@@ -288,6 +286,14 @@ def generate_expression_matrices(num_of_samples):
 		fout.write("{0}\n".format(','.join(header)))
 		for key, values in data.items():
 			fout.write("{0},{1}\n".format(','.join(key), ','.join(values)))
+	
+	gene_type_sum = " ".join([
+	"Rscript",  # Call Rscript
+	"gene_type_summary.R",  # Calling the script
+	current_dir,  # Input the current dir
+	postanalysis_dir,  # Input the post-analysis dir
+	"2>>", os.path.join(postanalysis_dir, "R_gene_type_sum-report.txt")]) 
+	subprocess.run(gene_type_sum, shell=True)
 	return
 
 def summary(num_of_files):
