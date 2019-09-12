@@ -173,7 +173,7 @@ def mapping_qc():
 		alignment_qc = ' '.join([
 		"bam_alignment_qc.py",
 		"-f", ref_file,  # Input reference file
-		"-x",  # Do not plot per-reference information
+		"-x -Q",  # Do not plot per-reference information/ Keep qiet
 		"-r", "{0}/{1}.{2}.bam_alignment_qc.pdf".format(postanalysis_dir, file_name, aligned_to),  # Output pdf file
 		"-p", "{0}/{1}.{2}.bam_alignment_qc.pk".format(postanalysis_dir, file_name, aligned_to),  # Output pk file
 		file,
@@ -256,7 +256,8 @@ def generate_expression_matrices(num_of_samples):
 		for i, line in enumerate(ref_in):
 			if not line.startswith("#"):
 				gene_id = line.split("\t")[-1].split(";")[0].split(" ")[-1].strip("\"")
-				gene_type = [line.split("\t")[-1].split(";")[1].split()[1].strip("\"").strip() ,line.split("\t")[-1].split(";")[2].split()[1].strip("\"").strip()] [line.split("\t")[-1].split(";")[2].split()[0].strip()=="gene_type"]
+				gene_type = [line.split("\t")[-1].split(";")[1].split()[1].strip("\"").strip() ,line.split("\t")[-1].split(";")[2].split()[1].strip("\"").strip()]\
+							[line.split("\t")[-1].split(";")[2].split()[0].strip()=="gene_type"]
 				annot[gene_id] = gene_type
 
 	
@@ -311,9 +312,9 @@ def summary(num_of_files):
 	# Wub Compare alignment QC statistics of multiple samples
 	bam_multi_qc = ' '.join([
 	"bam_multi_qc.py",
-	"-r", "{0}/{1}.{2}.bam_alignment_qc.pdf".format(postanalysis_dir, file_name, aligned_to),  # Output pdf file
+	"-r", "{0}/comparison_qc.pdf".format(postanalysis_dir),  # Output pdf file
 	' '.join(pickle_files),
-	"2>>", os.path.join(postanalysis_dir, "{0}_{1}_bam_multi_qc-report.txt".format(file_name, aligned_to))])
+	"2>>", os.path.join(postanalysis_dir, "bam_multi_qc-report.txt")])
 	subprocess.run(bam_multi_qc, shell=True)
 
 	## Cleaning up reports folder
@@ -347,7 +348,7 @@ def summary(num_of_files):
 	if not os.path.exists(qc_reports): os.makedirs(qc_reports)
 
 	# Moving files to "qc_reports" directory
-	os.system('mv {0}/*alignment_qc.pk {1}'.format(postanalysis_dir, qc_reports))
+	os.system('mv {0}/*_qc.pk {1}'.format(postanalysis_dir, qc_reports))
 	os.system('mv {0}/*log* {1}'.format(current_dir, qc_reports))
 	os.system('mv {0}/*.fragSize {1}'.format(postanalysis_dir, qc_reports))
 	os.system('mv {0}/*sum.* {1}'.format(postanalysis_dir, qc_reports))
