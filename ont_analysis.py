@@ -22,7 +22,7 @@ description = "DESCRIPTION"
 
 parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, usage=usage, description=description, epilog=epilog)
 # Number of threads/CPUs to be used
-parser.add_argument('-th', '--threads', dest='threads', default=str(30), metavar='', 
+parser.add_argument('-t', '--threads', dest='threads', default=str(30), metavar='', 
                 	help="Number of threads to be used in the analysis")
 # Display the version of the pipeline 
 parser.add_argument('-v', '--version', action='version', version='%(prog)s {0}'.format(__version__))
@@ -32,7 +32,7 @@ args = parser.parse_args()
 current_dir = os.getcwd()
 
 # Main folder hosting the analysis
-analysis_dir = os.path.join(current_dir, "ont_data_analysis")
+analysis_dir = os.path.join(current_dir, "guppy_ont_analysis")
 prepr_dir = os.path.join(analysis_dir, "preprocessed_data")
 alignments_dir = os.path.join(analysis_dir, "alignments")
 reports_dir = os.path.join(analysis_dir, "pre-analysis")
@@ -41,6 +41,7 @@ postanalysis_dir = os.path.join(analysis_dir, "post-analysis")
 
 
 def quality_control(i, seq_summary_file, sample_id, raw_data_dir):
+	# Producing preliminary QC reports 
 	if not os.path.exists(reports_dir): os.makedirs(reports_dir)
 
 	if i == 1: print(">>> pycoQC - Quality Control of the raw data: in progress ..")
@@ -86,7 +87,7 @@ def preprocessing_raw_data(raw_data_dir):
 def alignment_against_ref(i, sample_id, raw_data_dir):
 	if not os.path.exists(alignments_dir): os.makedirs(alignments_dir)
 
-	dataset = [sum_file for sum_file in glob.glob(os.path.join(raw_data_dir, "fastq_pass_file/*fastq.gz"))][0]
+	dataset = [sum_file for sum_file in glob.glob(os.path.join(raw_data_dir, "fastq_pass_file/guppy*.pass.fastq.gz"))][0]
 	file_name = os.path.basename(dataset.split(".")[0])
 
 	### ALIGN THE RAW READS AGAINST THE REFERENCE GENOME
@@ -139,7 +140,16 @@ def mapping_qc():
 	genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
 
 	### EXPORTING ALIGNMENT STATS
-	print(">>> RSeQC, Picard & WUB - Generating post-alignment stats: in progress ..")
+	print(">>> PycoQC - Generating post-alignment stats: in progress ..")
+	pycoQC = " ".join([
+	"pycoQC",  # Call pycoQC
+	"--bam_file", ' '.join(genome_alignments),  # Input of bam files from Minimap2
+	"--html_outfile", os.path.join(postanalysis_dir, "pycoQC-report.html"),  # Create the report in the reports directory
+	"--report_title", "\"Post-alignment quality control report\"",  # A title to be used in the html report
+	"2>>", os.path.join(postanalysis_dir, "pycoQC-report.txt")])
+	subprocess.run(pycoQC, shell=True)
+
+	print(">>> RSeQC, Picard, AlignQC & WUB - Generating post-alignment stats: in progress ..")
 	for i, file in enumerate(aligned_data, 1):
 		file_name = os.path.basename(file).split(".")[0]
 		aligned_to = ["transcriptome", "genome"][file.endswith(".genome.bam")]
@@ -168,6 +178,17 @@ def mapping_qc():
 		"2>>", os.path.join(postanalysis_dir, "{0}_{1}_CollectAlignmentSummaryMetrics-report.txt".format(file_name, aligned_to))])
 		subprocess.run(CollectAlignmentSummaryMetrics, shell=True) 
 
+		# AlignQC 
+		alignqc = ' '.join([
+		"alignqc analyze",  # Calling AlignQC analyze
+		"--threads", args.threads,
+		"--genome", ref_file,  # Reference in .fasta
+		"--gtf", ''.join([refAnnot, ".gz"]),  # Input reference annotation in gzipped form
+		"--output", "{0}/{1}.{2}.alignqc.xhtml".format(postanalysis_dir, file_name, aligned_to),  # Output pdf file
+		file,
+		"2>>", os.path.join(postanalysis_dir, "{0}_{1}_alignqc-report.txt".format(file_name, aligned_to))])
+		subprocess.run(alignqc, shell=True)
+
 		# Wub Alignment based QC plots
 		print(">>> WUB - Alignment based QC plots: in progress ..")
 		alignment_qc = ' '.join([
@@ -178,7 +199,7 @@ def mapping_qc():
 		"-p", "{0}/{1}.{2}.bam_alignment_qc.pk".format(postanalysis_dir, file_name, aligned_to),  # Output pk file
 		file,
 		"2>>", os.path.join(postanalysis_dir, "{0}_{1}_alignment_qc-report.txt".format(file_name, aligned_to))])
-		subprocess.run(alignment_qc, shell=True)
+		# subprocess.run(alignment_qc, shell=True)
 
 		### GENOME ALIGNMENTS STATS 
 		if file.endswith(".genome.bam"):
@@ -291,7 +312,7 @@ def generate_expression_matrices(num_of_samples):
 	gene_type_sum = " ".join([
 	"Rscript",  # Call Rscript
 	"gene_type_summary.R",  # Calling the script
-	current_dir,  # Input the current dir
+	postanalysis_dir,  # Input the current dir
 	postanalysis_dir,  # Input the post-analysis dir
 	"2>>", os.path.join(postanalysis_dir, "R_gene_type_sum-report.txt")]) 
 	subprocess.run(gene_type_sum, shell=True)
@@ -315,7 +336,7 @@ def summary(num_of_files):
 	"-r", "{0}/comparison_qc.pdf".format(postanalysis_dir),  # Output pdf file
 	' '.join(pickle_files),
 	"2>>", os.path.join(postanalysis_dir, "bam_multi_qc-report.txt")])
-	subprocess.run(bam_multi_qc, shell=True)
+	# subprocess.run(bam_multi_qc, shell=True)
 
 	## Cleaning up reports folder
 	figures_pre_dir = os.path.join(reports_dir, "figures")
@@ -348,7 +369,7 @@ def summary(num_of_files):
 	if not os.path.exists(qc_reports): os.makedirs(qc_reports)
 
 	# Moving files to "qc_reports" directory
-	os.system('mv {0}/*_qc.pk {1}'.format(postanalysis_dir, qc_reports))
+	# os.system('mv {0}/*_qc.pk {1}'.format(postanalysis_dir, qc_reports))
 	os.system('mv {0}/*log* {1}'.format(current_dir, qc_reports))
 	os.system('mv {0}/*.fragSize {1}'.format(postanalysis_dir, qc_reports))
 	os.system('mv {0}/*sum.* {1}'.format(postanalysis_dir, qc_reports))
@@ -360,9 +381,9 @@ def summary(num_of_files):
 
 def main():
 	
-	summary_files = [file_path for file_path in Path(ont_data).glob('**/*_sequencing_summary.txt')]
+	summary_files = [file_path for file_path in Path(ont_data).glob('**/guppy_sequencing_summary.txt')]
 	num_of_samples = len(summary_files)
-	
+
 	for i, sum_file in enumerate(summary_files, 1):
 		sample_id = sum_file.parts[4].split("_")[-1]
 		raw_data_dir = str(sum_file.parents[1])
