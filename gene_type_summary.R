@@ -17,7 +17,7 @@ library("RColorBrewer")
 setwd(outdir)
 
 # Input the edited expression matrix
-expr_file <- read.csv(paste(current_dir, "expression_matrix.csv", sep="/"), header=TRUE, row.names=1)
+expr_file <- read.csv(paste(current_dir, "perGene_expression_matrix.csv", sep="/"), header=TRUE, row.names=1)
 # Convert sample columns into numeric
 expr_file[ ,2:ncol(expr_file)] <- sapply(expr_file[ ,2:ncol(expr_file)], as.numeric)
 
