@@ -13,8 +13,8 @@ import shutil, time, glob, sys, os, re
 ont_data =  "/home/stavros/playground/ont_basecalling/guppy_v3_basecalling"
 
 refGenomeGRCh38 = "/home/stavros/references/reference_genome/GRCh38_GencodeV31_primAssembly/GRCh38.primary_assembly.genome.fa"
-refTranscGRCh38 = "/home/stavros/references/reference_transcriptome/ensembl_cdna_ncrna/GRCh38_cdna_ncrna.fasta"
-refAnnot = "/home/stavros/references/reference_annotation/GRCh38_gencode.v31.primAssembly_psudo_trna.annotation.gtf"
+refTranscGRCh38 = "/home/stavros/references/reference_transcriptome/GRCh38_gencode.v31.transcripts_trna.fa"
+refAnnot = "/home/stavros/references/reference_annotation/GRCh38_gencode.v31.primAssembly_pseudo_trna.annotation.gtf"
 reference_annotation_bed = "/home/stavros/references/reference_annotation/hg38_gencode.v31.allComprehensive_pseudo.annotation.bed"
 
 usage = "ont_analysis [options]"
@@ -23,7 +23,7 @@ description = "DESCRIPTION"
 
 parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, usage=usage, description=description, epilog=epilog)
 # Number of threads/CPUs to be used
-parser.add_argument('-t', '--threads', dest='threads', default=str(20), metavar='', 
+parser.add_argument('-t', '--threads', dest='threads', default=str(30), metavar='', 
                 	help="Number of threads to be used in the analysis")
 # Display the version of the pipeline 
 parser.add_argument('-v', '--version', action='version', version='%(prog)s {0}'.format(__version__))
@@ -35,6 +35,7 @@ startTime = datetime.now()
 
 # Main folder hosting the analysis
 analysis_dir = os.path.join(current_dir, "batch3_analysis_TEST")
+# analysis_dir = os.path.join(current_dir, "analysis_batch3")
 prepr_dir = os.path.join(analysis_dir, "preprocessed_data")
 alignments_dir = os.path.join(analysis_dir, "alignments")
 reports_dir = os.path.join(analysis_dir, "pre-analysis")
@@ -90,7 +91,7 @@ def preprocessing_raw_data(raw_data_dir):
 
 def alignment_against_ref(i, sample_id, raw_data_dir):
 	if not os.path.exists(alignments_dir): os.makedirs(alignments_dir)
-	print("\n\t{0} ALIGNING AGAINSTE THE REF. GENOME AND TRANSCRIPTOME".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+	if i == 1: print("\n\t{0} ALIGNING AGAINSTE THE REF. GENOME AND TRANSCRIPTOME".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 
 	dataset = [sum_file for sum_file in glob.glob(os.path.join(raw_data_dir, "pass/*.fastq.gz"))][0]
 
@@ -118,7 +119,7 @@ def alignment_against_ref(i, sample_id, raw_data_dir):
 
 	## ALIGN THE UNMAPPED READS AGAINST THE REFERENCE TRANSCRIPTOME
 	# print(">> minimap2 - Mapping the analigend reads against the reference transcriptome: in progress ..")
-	print("{0}  minimap2 - Mapping {1} against the reference transcriptome: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M"), sample_id))	
+	print("\n{0}  minimap2 - Mapping {1} against the reference transcriptome: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M"), sample_id))	
 	minimap2_transcriptome = " ".join([
 	"~/playground/progs/minimap2-2.17_x64-linux/minimap2",  # Call minimap2 (v2.17-r941)
 	"-t", args.threads,  # Number of threds to use
@@ -266,107 +267,206 @@ def mapping_qc():
 			subprocess.run(mapping_pos, shell=True)
 	return
 
-def generate_perGene_expression_matrix(num_of_samples):
-	print("\n\t{0} GENERATING THE PERGENE EXPRESSION MATRIX".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+class expression_matrix:
 
-	genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
-	print("{0}  FeatureCounts perGene - Counting reads from the genome aligned data: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-	featureCounts_gn = " ".join([
-	"featureCounts",  # Call featureCounts
-	"-T", args.threads,  # Number of threads to be used by the script
-	"-a", refAnnot,  # Annotation file in GTF/GFF format
-	"-L",  # Count long reads such as Nanopore and PacBio reads
-	"-o", os.path.join(postanalysis_dir, "genome_alignments_perGene_sum.tab"),
-	' '.join(genome_alignments),  # Input bam file
-	"2>>", os.path.join(postanalysis_dir, "featureCounts_genome_summary_perGene-report.txt")]) 
-	subprocess.run(featureCounts_gn, shell=True)
-	
-	print("{0}  Exporting the per gene (genomic) expression matrix: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-	subprocess.run("cut -f1,7- {0}/genome_alignments_perGene_sum.tab | sed 1d > {0}/featureCounts_expression_perGene_matrix.txt".format(postanalysis_dir), shell=True)
+	def __init__(self, threads):
+		
+		self.generate_perGene_expression_matrix(threads)
+		# self.generate_perTranscript_expression_matrix(threads)
+		# self.generate_expression_matrices()
+		# self.novel_transcripts_detection(args.threads)
+		return
 
-	annot = {}
-	with open(refAnnot) as ref_in:
-		for i, line in enumerate(ref_in):
-			if not line.startswith("#"):
-				gene_id = line.split("\t")[-1].split(";")[0].split(" ")[-1].strip("\"")
-				gene_type = [line.split("\t")[-1].split(";")[1].split()[1].strip("\"").strip() ,line.split("\t")[-1].split(";")[2].split()[1].strip("\"").strip()]\
-							[line.split("\t")[-1].split(";")[2].split()[0].strip()=="gene_type"]
-				annot[gene_id] = gene_type
+	def generate_perGene_expression_matrix(self, threads):
 
-	data = {}
-	header = []
-	with open("{0}/featureCounts_expression_perGene_matrix.txt".format(postanalysis_dir)) as mat_in:
-		for i, line in enumerate(mat_in, 1):
-			if i == 1:
-				header = line.split()
+		if not os.path.exists(postanalysis_dir): os.makedirs(postanalysis_dir)
+		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
+		print("\n\t{0} GENERATING THE PER-GENE EXPRESSION MATRIX".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		print("{0}  FeatureCounts perGene - Counting reads from the genome aligned data: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		featureCounts_gn = " ".join([
+		"featureCounts",  # Call featureCounts
+		"-T", threads,  # Number of threads to be used by the script
+		"-a", refAnnot,  # Annotation file in GTF/GFF format
+		"-L",  # Count long reads such as Nanopore and PacBio reads
+		"-o", os.path.join(postanalysis_dir, "genome_alignments_perGene_sum.tab"),
+		' '.join(genome_alignments),  # Input bam file
+		"2>>", os.path.join(postanalysis_dir, "featureCounts_genome_summary_perGene-report.txt")]) 
+		subprocess.run(featureCounts_gn, shell=True)
+		
+		print("{0}  Exporting the per gene (genomic) expression matrix: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		subprocess.run("cut -f1,7- {0}/genome_alignments_perGene_sum.tab | sed 1d > {0}/featureCounts_expression_perGene_matrix.txt".format(postanalysis_dir), shell=True)
 
-			else:
-				gene = line.strip().split()[0]
-				values = line.strip().split()[1:]
-				if not sum(map(int, values)) == 0:
-					if annot[gene].endswith("pseudogene"):
-						data[(gene, "pseudogene")] = values
-					else:
-						data[(gene, annot[gene])] = values
+		annot = {}
+		with open(refAnnot) as ref_in:
+			for i, line in enumerate(ref_in):
+				if not line.startswith("#"):
+					gene_id = line.split("\t")[-1].split(";")[0].split(" ")[-1].strip("\"")
+					gene_type = [line.split("\t")[-1].split(";")[1].split()[1].strip("\"").strip() ,line.split("\t")[-1].split(";")[2].split()[1].strip("\"").strip()]\
+								[line.split("\t")[-1].split(";")[2].split()[0].strip()=="gene_type"]
+					annot[gene_id] = gene_type
 
-	# Remove paths from sample names
-	header = [elm.split("/")[-1] for elm in header]
-	header.insert(1, "gene_type")  # Inserting gene_type in header
-	header[0] = "gene_id"  # Replacing Geneid with gene_id in header
+		data = {}
+		header = []
+		# nc = ["miRNA", "piRNA", "rRNA", "siRNA", "snRNA", "snoRNA", "tRNA", "vaultRNA"]
+		with open("{0}/featureCounts_expression_perGene_matrix.txt".format(postanalysis_dir)) as mat_in:
+			for i, line in enumerate(mat_in, 1):
+				if i == 1:
+					header = line.split()
+				else:
+					gene = line.strip().split()[0]
+					values = line.strip().split()[1:]
+					if not sum(map(int, values)) == 0:
+						# Grouping all pseudogenes
+						if annot[gene].endswith("pseudogene"):
+							data[(gene, "pseudogene")] = values
+						# Grouping all immunoglobin genes
+						elif annot[gene].startswith("IG_"):
+							data[(gene, "Immunoglobulin_genes")] = values
+						# Grouping all T-cell receptor genes
+						elif annot[gene].startswith("TR_"):
+							data[(gene, "Tcell_receptor_genes")] = values
+						# Reanming TEC group
+						elif annot[gene].startswith("TEC"):
+							data[(gene, "To_be_Experimentally_Confirmed")] = values
+						# Rest
+						else:
+							data[(gene, annot[gene])] = values
 
-	# Writing output to file 'expression_matrix.csv'
-	with open("{0}/perGene_expression_matrix.csv".format(postanalysis_dir), "a") as fout:
-		fout.write("{0}\n".format(','.join(header)))
-		for key, values in data.items():
-			fout.write("{0},{1}\n".format(','.join(key), ','.join(values)))
-	
-	gene_type_sum = " ".join([
-	"Rscript",  # Call Rscript
-	"gene_type_summary.R",  # Calling the script
-	postanalysis_dir,  # Input the current dir
-	postanalysis_dir,  # Output dir
-	"2>>", os.path.join(postanalysis_dir, "R_gene_type_sum-report.txt")]) 
-	subprocess.run(gene_type_sum, shell=True)
-	return
+		# Remove paths from sample names
+		header = [elm.split("/")[-1].split(".")[0] for elm in header]
+		header.insert(1, "gene_type")  # Inserting gene_type in header
+		header[0] = "gene_id"  # Replacing Geneid with gene_id in header
 
-def generate_perTranscript_expression_matrix(num_of_samples):
-	print("\n\t{0} GENERATING THE PERGENE EXPRESSION MATRIX".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		# Writing output to file 'expression_matrix.csv'
+		with open("{0}/perGene_expression_matrix.csv".format(postanalysis_dir), "a") as fout:
+			fout.write("{0}\n".format(','.join(header)))
+			for key, values in data.items():
+				fout.write("{0},{1}\n".format(','.join(key), ','.join(values)))
+		
+		# gene_type_sum = " ".join([
+		# "Rscript",  # Call Rscript
+		# "gene_type_summary.R",  # Calling the script
+		# "{0}/perGene_expression_matrix.csv".format(postanalysis_dir),  # Input matrix
+		# postanalysis_dir,  # Output dir
+		# "2>>", os.path.join(postanalysis_dir, "R_gene_type_sum-report.txt")]) 
+		# subprocess.run(gene_type_sum, shell=True)
+		return
 
-	genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
-	print("{0}  FeatureCounts per Transcript - Counting reads from the genome aligned data: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-	featureCounts_gntr = " ".join([
-	"featureCounts",  # Call featureCounts
-	"-T", args.threads,  # Number of threads to be used by the script
-	"-g", "\'transcript_id\'",  # 
-	"-a", refAnnot,  # Annotation file in GTF/GFF format
-	"-L",  # Count long reads such as Nanopore and PacBio reads
-	"-o", os.path.join(postanalysis_dir, "genome_alignments_perTranscript_sum.tab"),
-	' '.join(genome_alignments),  # Input bam file
-	"2>>", os.path.join(postanalysis_dir, "featureCounts_genome_summary_perTranscript-report.txt")]) 
-	subprocess.run(featureCounts_gntr, shell=True)
-	
-	print("{0}  Exporting the per transcript (genomic) expression matrix: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-	subprocess.run("cut -f1,7- {0}/genome_alignments_perTranscript_sum.tab | sed 1d > {0}/featureCounts_expression_perTranscript_matrix.txt".format(postanalysis_dir), shell=True)
-	return
+	def generate_perTranscript_expression_matrix(self, threads):
+		
+		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
+		print("\n\t{0} GENERATING THE PER-TRANSCRIPT EXPRESSION MATRIX".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		print("{0}  FeatureCounts per Transcript - Counting reads from the genome aligned data: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		featureCounts_gntr = " ".join([
+		"featureCounts",  # Call featureCounts
+		"-T", threads,  # Number of threads to be used by the script
+		"-g", "\'transcript_id\'",  # 
+		"-a", refAnnot,  # Annotation file in GTF/GFF format
+		"-L",  # Count long reads such as Nanopore and PacBio reads
+		"-o", os.path.join(postanalysis_dir, "genome_alignments_perTranscript_sum.tab"),
+		' '.join(genome_alignments),  # Input bam file
+		"2>>", os.path.join(postanalysis_dir, "featureCounts_genome_summary_perTranscript-report.txt")]) 
+		subprocess.run(featureCounts_gntr, shell=True)
+		
+		print("{0}  Exporting the per transcript (genomic) expression matrix: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		subprocess.run("cut -f1,7- {0}/genome_alignments_perTranscript_sum.tab | sed 1d > {0}/featureCounts_expression_perTranscript_matrix.txt".format(postanalysis_dir), shell=True)
+		return
 
-def generate_expression_matrices(num_of_samples):
-	
-	genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
-	print("{0}  Salmon quant (alignment-based) - Counting reads from the genome aligned data: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-	salmon_quant = " ".join([
-	"salmon quant",  # Call salmon quant
-	"--threads 6",  # 6 cores to be used
-	"--libType", "A",  # Format string describing the library type
-	"--targets", refTranscGRCh38,  #
-	"--geneMap", refAnnot,  # Annotation file in GTF format
-	"--alignments", ' '.join(genome_alignments),  # Input bam file
-	"--output", os.path.join(postanalysis_dir, "salmon_analysis"),
-	"2>>", os.path.join(postanalysis_dir, "salmonQuant_genome_summary-report.txt")]) 
-	subprocess.run(salmon_quant, shell=True)
-	
-	# print("Exporting the per transcript (genomic) expression matrix: in progress ..")
-	# subprocess.run("cut -f1,7- {0}/genome_alignments_perTranscript_sum.tab | sed 1d > {0}/featureCounts_expression_perTranscript_matrix.txt".format(postanalysis_dir), shell=True)
-	return	
+	def generate_expression_matrices(self):
+		
+		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.transcriptome.bam"))]
+		print("{0}  Salmon quant (alignment-based) - Counting reads from the transcriptome aligned data: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		salmon_quant = " ".join([
+		"salmon quant",  # Call salmon quant
+		"--threads 6",  # 6 cores to be used
+		"--libType", "A",  # Format string describing the library type
+		"--targets", refTranscGRCh38,  #
+		"--geneMap", refAnnot,  # Annotation file in GTF format
+		"--alignments", ' '.join(genome_alignments),  # Input bam file
+		"--output", os.path.join(postanalysis_dir, "salmon_analysis_tr"),
+		"2>>", os.path.join(postanalysis_dir, "salmonQuant_transcriptome_summary-report.txt")]) 
+		subprocess.run(salmon_quant, shell=True)
+		return	
+
+	def novel_transcripts_detection(self):
+
+		return
+
+class special_analysis:
+
+	def __init__(self):
+		self.structural_variation()
+		self.methylation_detection()
+		return
+
+	def methylation_detection(self):
+		if not os.path.exists(methylation_dir): os.makedirs(methylation_dir)
+		single_fast5_data = [os.path.dirname(sum_file) for sum_file in glob.glob("/shared/projects/silvia_rna_ont_umc/basecalling/sample*_raw_data/*/")]
+
+		# print(single_fast5_data)
+		for dirs in single_fast5_data:
+			if dirs.endswith("/0"):
+
+				sample_id = dirs.split("/")[5].split("_")[0]
+				# 1. Re-squiggling the raw reads
+				tombo_resquiggle = " ".join([
+				"tombo resquiggle",
+				dirs,
+				refGenomeGRCh38,
+				"--processes", args.threads,  # Number of threads to be used
+				"--num-most-common-errors 5",
+				# "2>>", os.path.join(methylation_dir, "tombo_resquiggle-report.txt")
+				])
+				subprocess.run(tombo_resquiggle, shell=True)
+			
+			# 2. Calling tombo to do the methylation analysis
+			tombo_methyl = " ".join([
+			"tombo detect_modifications de_novo",  # Indexing the concat_samples.bam file
+			"--fast5-basedirs", dirs,  # Directory containing fast5 files
+			"--statistics-file-basename", os.path.join(methylation_dir,"{0}.tombo.stats".format(sample_id)),
+			"--rna",  # Explicitly select canonical RNA mode
+			"--processes", args.threads,  # Number of threads to be used
+			# "2>>", os.path.join(methylation_dir, "tombo_methylation-report.txt")
+			])
+			subprocess.run(tombo_methyl, shell=True)
+
+			# 3. Output reference sequence around most significantly modified sites
+			tombo_sign = " ".join([
+			"tombo text_output signif_sequence_context",  # Indexing the concat_samples.bam file
+			"--fast5-basedirs", dirs,  # Directory containing fast5 files
+			"--statistics-filename", os.path.join(methylation_dir,"{0}.tombo.stats".format(sample_id)),
+			"--sequences-filename",  os.path.join(methylation_dir,"{0}.tombo_significant_regions.fasta".format(sample_id)),
+			# "2>>", os.path.join(methylation_dir, "tombo_significants-report.txt")
+			])
+			subprocess.run(tombo_sign, shell=True)
+
+			# # 4. Use line Meme to estimate modified motifs
+			# tombo_meme = " ".join([
+			# "meme",
+	  #  		"-rna",
+	  #  		"-mod zoops", 
+			# "-oc", os.path.join(methylation_dir,"{0}_de_novo_meme".format(sample_id)),
+	  #  		os.path.join(methylation_dir,"{0}.tombo_significant_regions.fasta".format(sample_id)),
+	  #  		# "2>>", os.path.join(methylation_dir, "tombo_meme-report.txt")
+			# ])
+			# subprocess.run(tombo_meme, shell=True)
+
+			# # 5. This plot will identify the sites in the reference
+			# tombo_plot = " ".join([
+			# "tombo plot motif_with_stats",
+			# " --fast5-basedirs", dirs,
+	  #  		"--motif CCWGG",
+	  #  		"--genome-fasta", refGenomeGRCh38,
+	  #  		"--statistics-filename", os.path.join(methylation_dir,"{0}.tombo.stats".format(sample_id)),
+	  #  		"--pdf-filename", os.path.join(methylation_dir,"{0}.tombo.pdf".format(sample_id))
+	  #  		# "2>>", os.path.join(methylation_dir, "tombo_plot-report.txt")
+			# ])
+			# subprocess.run(tombo_plot, shell=True)
+		return
+
+	def structural_variation(self):
+
+		return
 
 def summary(num_of_files):
 	print("{0}  multiQC - Summing all QC reports: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
@@ -429,76 +529,11 @@ def summary(num_of_files):
 	os.system('mv {0}/*summarised_report_data {1}'.format(postanalysis_dir, qc_reports))
 	return
 
-def methylation_detection():
-
-	if not os.path.exists(methylation_dir): os.makedirs(methylation_dir)
-	single_fast5_data = [os.path.dirname(sum_file) for sum_file in glob.glob("/shared/projects/silvia_rna_ont_umc/basecalling/sample*_raw_data/*/")]
-
-	# print(single_fast5_data)
-	for dirs in single_fast5_data:
-		if dirs.endswith("/0"):
-
-			sample_id = dirs.split("/")[5].split("_")[0]
-			# 1. Re-squiggling the raw reads
-			tombo_resquiggle = " ".join([
-			"tombo resquiggle",
-			dirs,
-			refGenomeGRCh38,
-			"--processes", args.threads,  # Number of threads to be used
-			"--num-most-common-errors 5",
-			# "2>>", os.path.join(methylation_dir, "tombo_resquiggle-report.txt")
-			])
-			subprocess.run(tombo_resquiggle, shell=True)
-		
-		# 2. Calling tombo to do the methylation analysis
-		tombo_methyl = " ".join([
-		"tombo detect_modifications de_novo",  # Indexing the concat_samples.bam file
-		"--fast5-basedirs", dirs,  # Directory containing fast5 files
-		"--statistics-file-basename", os.path.join(methylation_dir,"{0}.tombo.stats".format(sample_id)),
-		"--rna",  # Explicitly select canonical RNA mode
-		"--processes", args.threads,  # Number of threads to be used
-		# "2>>", os.path.join(methylation_dir, "tombo_methylation-report.txt")
-		])
-		subprocess.run(tombo_methyl, shell=True)
-
-		# 3. Output reference sequence around most significantly modified sites
-		tombo_sign = " ".join([
-		"tombo text_output signif_sequence_context",  # Indexing the concat_samples.bam file
-		"--fast5-basedirs", dirs,  # Directory containing fast5 files
-		"--statistics-filename", os.path.join(methylation_dir,"{0}.tombo.stats".format(sample_id)),
-		"--sequences-filename",  os.path.join(methylation_dir,"{0}.tombo_significant_regions.fasta".format(sample_id)),
-		# "2>>", os.path.join(methylation_dir, "tombo_significants-report.txt")
-		])
-		subprocess.run(tombo_sign, shell=True)
-
-		# # 4. Use line Meme to estimate modified motifs
-		# tombo_meme = " ".join([
-		# "meme",
-  #  		"-rna",
-  #  		"-mod zoops", 
-		# "-oc", os.path.join(methylation_dir,"{0}_de_novo_meme".format(sample_id)),
-  #  		os.path.join(methylation_dir,"{0}.tombo_significant_regions.fasta".format(sample_id)),
-  #  		# "2>>", os.path.join(methylation_dir, "tombo_meme-report.txt")
-		# ])
-		# subprocess.run(tombo_meme, shell=True)
-
-		# # 5. This plot will identify the sites in the reference
-		# tombo_plot = " ".join([
-		# "tombo plot motif_with_stats",
-		# " --fast5-basedirs", dirs,
-  #  		"--motif CCWGG",
-  #  		"--genome-fasta", refGenomeGRCh38,
-  #  		"--statistics-filename", os.path.join(methylation_dir,"{0}.tombo.stats".format(sample_id)),
-  #  		"--pdf-filename", os.path.join(methylation_dir,"{0}.tombo.pdf".format(sample_id))
-  #  		# "2>>", os.path.join(methylation_dir, "tombo_plot-report.txt")
-		# ])
-		# subprocess.run(tombo_plot, shell=True)
-	return
 
 def main():
 	
 	# chosen_samples = ("NonTransf_1",  "NonTransf_2",  "NonTransf_3", "Tumour_1",  "Tumour_2",  "Tumour_3")
-	chosen_samples = ("Tumour_1")
+	chosen_samples = ("Tumour_1", "Tumour_2")
 
 	summary_files = [str(file_path) for file_path in Path(ont_data).glob('**/sequencing_summary.txt')]
 	num_of_samples = len(summary_files)
@@ -513,15 +548,15 @@ def main():
 
 	# mapping_qc()
 
-	# generate_perGene_expression_matrix(num_of_samples)
-
-	# generate_perTranscript_expression_matrix(num_of_samples)
-
-	generate_expression_matrices(num_of_samples)
+	expression_matrix(args.threads)
 
 	# summary(num_of_samples)
 
-	# methylation_detection()
+	# 
+
+	# 
+
+	
 
 	print('\t--- The pipeline finisded after {0} ---'.format(datetime.now() - startTime))
 if __name__ == "__main__": main()
