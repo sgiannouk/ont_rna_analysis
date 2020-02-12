@@ -13,9 +13,9 @@ if (length(args) == 2) {
 # outdir <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/R_analysis/R_script"
 # matrix <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/R_analysis/R_script/perGene_expression_matrix.csv"
 
+library("dplyr")
 library("plotly")
 library("reshape2")
-library("tidyverse")
 setwd(outdir)
 
 # Input the edited expression matrix
