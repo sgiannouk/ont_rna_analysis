@@ -3,46 +3,53 @@
 
 args <- commandArgs(TRUE)
 if (length(args) == 2) {
-  current_dir = args[1]
+  matrix = args[1]
   outdir <- args[2]
 } else {
   cat("ERROR - The number of input arguments is not correct...\nEXITING!\n")
   quit()
 }
 
+# outdir <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/R_analysis/R_script"
+# matrix <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/R_analysis/R_script/perGene_expression_matrix.csv"
+
 library("plotly")
-library("ggplot2")
 library("reshape2")
-library("RColorBrewer")
+library("tidyverse")
 setwd(outdir)
 
 # Input the edited expression matrix
-expr_file <- read.csv(paste(current_dir, "perGene_expression_matrix.csv", sep="/"), header=TRUE, row.names=1)
+expr_file <- read.csv(matrix, header=TRUE, row.names=1)
+# Remove transcript names
+row.names(expr_file) <- NULL
 # Convert sample columns into numeric
 expr_file[ ,2:ncol(expr_file)] <- sapply(expr_file[ ,2:ncol(expr_file)], as.numeric)
-
+# Collapsing  all reads per categories
+expr_file <- aggregate(expr_file[ ,2:ncol(expr_file)], by=list(Category=expr_file[,1]), FUN=sum)
 # Divide each column by its sum (getting percentages)
 expr_file[ ,2:ncol(expr_file)] <- as.data.frame(lapply(expr_file[ ,2:ncol(expr_file)], function(x) x/sum(x)))
-
-
 # Prepare the matrix for plotting
-mtx <- melt(expr_file, id.vars="gene_type")
+mtx <- melt(expr_file, id.vars="Category")
 
-colors <- c("#89C5DA", "#DA5724", "#74D944", "#CE50CA","#E6AB02", "#A6761D", 
-            "#1B9E77", "#D7C1B1", "#689030", "#652926", "#66A61E", "#56B4E9", 
-            "#5E738F", "#D1A33D", "#3F4921", "#7FDCC0", "#C84248")
-num <- length(unique(expr_file$gene_type))
+# Colouring
+colors <- c('#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231',
+            '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', 
+            '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', 
+            '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080',
+            '#ffffff', '#000000')
+
+num <- length(unique(expr_file$Category))
 
 # ggplot 
-p <- ggplot(mtx, aes(x = variable , y = value, fill = gene_type)) +
-     geom_bar(stat = "identity", position = "stack") +
+p <- ggplot(mtx, aes(x = variable , y = value, fill = Category)) +
+     geom_bar(stat = "identity", position = "stack", width = 0.3) +
      theme_bw() +
      scale_fill_manual("", values = colorRampPalette(colors)(num)) +
      scale_y_continuous(labels = scales::percent) +
      theme(legend.position = "bottom") +
      ylab("Percentage of reads (%)") +
      xlab("") +
-     ggtitle("Gene type summarisation")
+     ggtitle("Gene type summarisation  (ref. genome)")
 ggsave(file="gene_type_summarisation.png", width = 10, height = 6, units = "in", dpi = 1200)
 
 ptly <- ggplotly(p, originalData = T, dynamicTicks = T) %>% 
