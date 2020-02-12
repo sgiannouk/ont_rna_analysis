@@ -38,7 +38,7 @@ analysis_dir = os.path.join(current_dir, "batch3_analysis_TEST")
 # analysis_dir = os.path.join(current_dir, "analysis_batch3")
 prepr_dir = os.path.join(analysis_dir, "preprocessed_data")
 alignments_dir = os.path.join(analysis_dir, "alignments")
-reports_dir = os.path.join(analysis_dir, "pre-analysis")
+reports_dir = os.path.join(analysis_dir, "reports")
 postanalysis_dir = os.path.join(analysis_dir, "post-analysis")
 methylation_dir = os.path.join(analysis_dir, "methylation_analysis")
 
@@ -114,8 +114,8 @@ def alignment_against_ref(i, sample_id, raw_data_dir):
 	"2>>", os.path.join(reports_dir, "minimap2_genome-report.txt")])  # Directory where all FastQC and Cutadapt reports reside
 	subprocess.run(minimap2_genome, shell=True)
 
-	### EXTRACTING THE UNMAPPED READS
-	subprocess.run("samtools view -f4 {0}/{1}.genome.bam | samtools bam2fq --threads {2} > {0}/{1}.genome_unmapped.fastq".format(alignments_dir, sample_id, args.threads), shell=True)
+	### EXTRACTING THE UNMAPPED READS (GENOME)
+	subprocess.run("samtools view -f4 --threads {2} {0}/{1}.genome.bam | samtools bam2fq --threads {2} - | gzip > {0}/{1}.genome.unmapped.fastq.gz".format(alignments_dir, sample_id, args.threads), shell=True)
 
 	## ALIGN THE UNMAPPED READS AGAINST THE REFERENCE TRANSCRIPTOME
 	# print(">> minimap2 - Mapping the analigend reads against the reference transcriptome: in progress ..")
@@ -136,6 +136,9 @@ def alignment_against_ref(i, sample_id, raw_data_dir):
 	"-o", os.path.join(alignments_dir, "{0}.transcriptome.bam".format(sample_id)), "-",  # Sorted output  BAM file
 	"2>>", os.path.join(reports_dir, "minimap2_transcriptome-report.txt")])  # Directory where all FastQC and Cutadapt reports reside
 	subprocess.run(minimap2_transcriptome, shell=True)
+
+	### EXTRACTING THE UNMAPPED READS (TRANSCRIPTOME)
+	subprocess.run("samtools view -f4 --threads {2} {0}/{1}.transcriptome.bam | samtools bam2fq --threads {2} - | gzip > {0}/{1}.transcriptome.unmapped.fastq.gz".format(alignments_dir, sample_id, args.threads), shell=True)
 	return
 
 def mapping_qc():
@@ -270,16 +273,17 @@ def mapping_qc():
 class expression_matrix:
 
 	def __init__(self, threads):
+		if not os.path.exists(postanalysis_dir): os.makedirs(postanalysis_dir)
 		
-		self.generate_perGene_expression_matrix(threads)
+		# self.generate_perGene_expression_matrix(threads)
 		# self.generate_perTranscript_expression_matrix(threads)
-		# self.generate_expression_matrices()
+		# self.generate_expression_matrices_Salmon()
 		# self.novel_transcripts_detection(args.threads)
+		# self.clean_expression_dir()
 		return
 
 	def generate_perGene_expression_matrix(self, threads):
 
-		if not os.path.exists(postanalysis_dir): os.makedirs(postanalysis_dir)
 		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
 		print("\n\t{0} GENERATING THE PER-GENE EXPRESSION MATRIX".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		print("{0}  FeatureCounts perGene - Counting reads from the genome aligned data: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
@@ -300,10 +304,11 @@ class expression_matrix:
 		with open(refAnnot) as ref_in:
 			for i, line in enumerate(ref_in):
 				if not line.startswith("#"):
-					gene_id = line.split("\t")[-1].split(";")[0].split(" ")[-1].strip("\"")
-					gene_type = [line.split("\t")[-1].split(";")[1].split()[1].strip("\"").strip() ,line.split("\t")[-1].split(";")[2].split()[1].strip("\"").strip()]\
-								[line.split("\t")[-1].split(";")[2].split()[0].strip()=="gene_type"]
-					annot[gene_id] = gene_type
+					if line.split("\t")[2].strip() == 'transcript' or line.split("\t")[2].strip().endswith('tRNA'):
+						gene_id = line.split("\t")[-1].split(";")[0].split(" ")[-1].strip("\"")
+						gene_type = [line.split("\t")[-1].split(";")[1].split()[1].strip("\"").strip() ,line.split("\t")[-1].split(";")[2].split()[1].strip("\"").strip()]\
+									[line.split("\t")[-1].split(";")[2].split()[0].strip()=="gene_type"]
+						annot[gene_id] = gene_type
 
 		data = {}
 		header = []
@@ -321,10 +326,10 @@ class expression_matrix:
 							data[(gene, "pseudogene")] = values
 						# Grouping all immunoglobin genes
 						elif annot[gene].startswith("IG_"):
-							data[(gene, "Immunoglobulin_genes")] = values
+							data[(gene, "Immunoglobulin_gene")] = values
 						# Grouping all T-cell receptor genes
 						elif annot[gene].startswith("TR_"):
-							data[(gene, "Tcell_receptor_genes")] = values
+							data[(gene, "Tcell_receptor_gene")] = values
 						# Reanming TEC group
 						elif annot[gene].startswith("TEC"):
 							data[(gene, "To_be_Experimentally_Confirmed")] = values
@@ -342,14 +347,15 @@ class expression_matrix:
 			fout.write("{0}\n".format(','.join(header)))
 			for key, values in data.items():
 				fout.write("{0},{1}\n".format(','.join(key), ','.join(values)))
-		
-		# gene_type_sum = " ".join([
-		# "Rscript",  # Call Rscript
-		# "gene_type_summary.R",  # Calling the script
-		# "{0}/perGene_expression_matrix.csv".format(postanalysis_dir),  # Input matrix
-		# postanalysis_dir,  # Output dir
-		# "2>>", os.path.join(postanalysis_dir, "R_gene_type_sum-report.txt")]) 
-		# subprocess.run(gene_type_sum, shell=True)
+
+		print("{0}  Visualising the RNA categories found in the (genomic) expression matrix: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		gene_type_sum = " ".join([
+		"Rscript",  # Call Rscript
+		"gene_type_summary.R",  # Calling the script
+		"{0}/perGene_expression_matrix.csv".format(postanalysis_dir),  # Input matrix
+		postanalysis_dir,  # Output dir
+		"2>>", os.path.join(postanalysis_dir, "R_gene_type_sum-report.txt")]) 
+		subprocess.run(gene_type_sum, shell=True)
 		return
 
 	def generate_perTranscript_expression_matrix(self, threads):
@@ -370,9 +376,46 @@ class expression_matrix:
 		
 		print("{0}  Exporting the per transcript (genomic) expression matrix: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		subprocess.run("cut -f1,7- {0}/genome_alignments_perTranscript_sum.tab | sed 1d > {0}/featureCounts_expression_perTranscript_matrix.txt".format(postanalysis_dir), shell=True)
+
+		annot = {}
+		with open(refAnnot) as ref_in:
+			for i, line in enumerate(ref_in):
+				if not line.startswith("#"):
+					if line.split("\t")[2].strip() == 'transcript' or line.split("\t")[2].strip().endswith('tRNA'):
+						transcript_id = line.split("\t")[-1].split(";")[1].split(" ")[-1].strip("\"")
+						gene_id = line.split("\t")[-1].split(";")[0].split(" ")[-1].strip("\"")
+						gene_name = line.split("\t")[-1].split(";")[3].split(" ")[-1].strip("\"")
+						gene_type = [line.split("\t")[-1].split(";")[1].split()[1].strip("\"").strip() ,line.split("\t")[-1].split(";")[2].split()[1].strip("\"").strip()]\
+									[line.split("\t")[-1].split(";")[2].split()[0].strip()=="gene_type"]
+						annot[transcript_id] = [gene_id, gene_name, gene_type]
+
+		data = {}
+		header = []
+		with open("{0}/featureCounts_expression_perTranscript_matrix.txt".format(postanalysis_dir)) as mat_in:
+			for i, line in enumerate(mat_in, 1):
+				if i == 1:
+					header = line.split()
+				else:
+					transcript = line.strip().split()[0]
+					values = line.strip().split()[1:]
+					if not sum(map(int, values)) == 0:
+						data[(transcript, ' '.join(annot[transcript]))] = values
+		
+		# Remove paths from sample names
+		header = [elm.split("/")[-1].split(".")[0] for elm in header]
+		header.insert(1, "gene_id")  # Inserting gene_id in header
+		header.insert(2, "gene_name")  # Inserting gene_name in header
+		header.insert(3, "gene_type")  # Inserting gene_type in header
+		header[0] = "transcript_id"  # Replacing Geneid with transcript_id in header
+
+		# Writing output to file 'expression_matrix.csv'
+		with open("{0}/perTranscript_expression_matrix.csv".format(postanalysis_dir), "a") as fout:
+			fout.write("{0}\n".format(','.join(header)))
+			for key, values in data.items():
+				fout.write("{0},{1}\n".format(','.join(key), ','.join(values)))
 		return
 
-	def generate_expression_matrices(self):
+	def generate_expression_matrices_Salmon(self):
 		
 		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.transcriptome.bam"))]
 		print("{0}  Salmon quant (alignment-based) - Counting reads from the transcriptome aligned data: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
@@ -389,7 +432,16 @@ class expression_matrix:
 		return	
 
 	def novel_transcripts_detection(self):
+		""" TALON takes transcripts from one or more long read datasets (SAM format) 
+		and assigns them transcript and gene identifiers based on a database-bound
+		annotation. Novel events are assigned new identifiers """
 
+		return
+
+	def clean_expression_dir(self):
+		os.system('mv {0}/*report.txt {1}'.format(postanalysis_dir, reports_dir))
+		os.system('mv {0}/*tab.summary {1}'.format(postanalysis_dir, reports_dir))
+		os.system('mv {0}/*sum.tab {1}'.format(postanalysis_dir, reports_dir))
 		return
 
 class special_analysis:
