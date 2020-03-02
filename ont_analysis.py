@@ -1,5 +1,4 @@
 ###Stavros Giannoukakos### 
-
 #Version of the program
 __version__ = "0.1.5"
 
@@ -12,6 +11,7 @@ import shutil, time, glob, sys, os, re
 
 ont_data =  "/home/stavros/playground/ont_basecalling/guppy_v3_basecalling"
 
+talon_database = "/home/stavros/playground/progs/TALON/talon_db/talon_db.db"
 refGenomeGRCh38 = "/home/stavros/references/reference_genome/GRCh38_GencodeV31_primAssembly/GRCh38.primary_assembly.genome.fa"
 refTranscGRCh38 = "/home/stavros/references/reference_transcriptome/GRCh38_gencode.v31.transcripts_trna.fa"
 refAnnot = "/home/stavros/references/reference_annotation/GRCh38_gencode.v31.primAssembly_pseudo_trna.annotation.gtf"
@@ -23,7 +23,7 @@ description = "DESCRIPTION"
 
 parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, usage=usage, description=description, epilog=epilog)
 # Number of threads/CPUs to be used
-parser.add_argument('-t', '--threads', dest='threads', default=str(30), metavar='', 
+parser.add_argument('-t', '--threads', dest='threads', default=str(40), metavar='', 
                 	help="Number of threads to be used in the analysis")
 # Display the version of the pipeline 
 parser.add_argument('-v', '--version', action='version', version='%(prog)s {0}'.format(__version__))
@@ -103,10 +103,14 @@ def alignment_against_ref(i, sample_id, raw_data_dir):
 	"-ax splice",   # Long-read spliced alignment mode and output in SAM format (-a)
 	"-k 14",  # k-mer size
 	"-uf",  # Find canonical splicing sites GT-AG - f: transcript strand
-	"--secondary=no",  #
+	"--secondary=no",  # Do not report any secondary alignments
+	"--MD",  # output the MD tag
 	# "-o", os.path.join(alignments_dir, "{0}.genome.paf".format(sample_id)),
 	refGenomeGRCh38,  # Inputting the reference genome
 	dataset,  # Input .fastq.gz file
+	"|" "samtools view",
+	"--threads", args.threads,  # Number of threads to be used by 'samtools view'
+	"-q 10",  # Filterring out reads with mapping quality lower than 10
 	"|", "samtools sort",  # Calling 'samtools sort' to sort the output alignment file
 	"--threads", args.threads,  # Number of threads to be used by 'samtools sort'
 	"--output-fmt BAM",  # Output in BAM format
@@ -125,11 +129,15 @@ def alignment_against_ref(i, sample_id, raw_data_dir):
 	"-t", args.threads,  # Number of threds to use
 	"-ax map-ont",
 	"-k 14",  # k-mer size
-	"--secondary=no",  # 
+	"--secondary=no",  # Do not report any secondary alignments
+	"--MD",  # output the MD tag
 	# "-o", os.path.join(alignments_dir, "{0}.transcriptome.paf".format(sample_id)),
 	refTranscGRCh38,  # Inputting the reference genome
 	dataset,
 	# "{0}/{1}.genome_unmapped.bam".format( alignments_dir, sample_id),  # Input .fastq.gz file
+	"|" "samtools view",
+	"--threads", args.threads,  # Number of threads to be used by 'samtools view'
+	"-q 10",  # Filterring out reads with mapping quality lower than 10
 	"|", "samtools sort",  # Calling 'samtools sort' to sort the output alignment file
 	"--threads", args.threads,  # Number of threads to be used by 'samtools sort'
 	"--output-fmt BAM",  # Output in BAM format
@@ -185,7 +193,7 @@ def mapping_qc():
 		# Picard CollectAlignmentSummaryMetrics
 		print("{0}  Picard - Collecting alignment summary metrics of {1}: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M"), file_name))
 		CollectAlignmentSummaryMetrics = ' '.join([
-		"picard CollectAlignmentSummaryMetrics",  # Call picard CollectAlignmentSummaryMetrics
+		"picard-tools CollectAlignmentSummaryMetrics",  # Call picard-tools CollectAlignmentSummaryMetrics
 		"INPUT= {0}".format(file),  # Input BAM file
 		"OUTPUT= {0}/{1}.{2}.alignment_metrics.txt".format(postanalysis_dir, file_name, aligned_to),  # Output
 		"REFERENCE_SEQUENCE= {0}".format(ref_file),  # Reference sequence file
@@ -251,7 +259,7 @@ def mapping_qc():
 			# Check duplicate reads
 			print("{0}  Picard - Extracting read duplication stats of {1}: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M"), file_name))
 			duplicate_reads = ' '.join([
-			"picard MarkDuplicates",  # Call samtools flagstat
+			"picard-tools MarkDuplicates",  # Call samtools flagstat
 			"INPUT= {0}".format(file),  # Input BAM file
 			"OUTPUT= {0}/{1}.genome.dedup.bam".format(alignments_dir, file_name),
 			"METRICS_FILE= {0}/{1}.{2}.mark_duplicates.txt".format(postanalysis_dir, file_name, aligned_to),  # Output file
@@ -275,14 +283,15 @@ class expression_matrix:
 	def __init__(self, threads):
 		if not os.path.exists(postanalysis_dir): os.makedirs(postanalysis_dir)
 		
-		# self.generate_perGene_expression_matrix(threads)
-		# self.generate_perTranscript_expression_matrix(threads)
-		# self.generate_expression_matrices_Salmon()
-		# self.novel_transcripts_detection(args.threads)
-		# self.clean_expression_dir()
+		# self.genome_perGene_em_featureCounts(threads)
+		self.transcriptome_em_salmon(threads)
+		# self.novel_transcripts_detection_talon(threads)
+		# self.novel_transcripts_detection_pinfish(threads)
+		# self.transcripts_abundance_nanocount()
+		# self.clean_expression_dirs()
 		return
 
-	def generate_perGene_expression_matrix(self, threads):
+	def genome_perGene_em_featureCounts(self, threads):
 
 		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
 		print("\n\t{0} GENERATING THE PER-GENE EXPRESSION MATRIX".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
@@ -358,87 +367,224 @@ class expression_matrix:
 		subprocess.run(gene_type_sum, shell=True)
 		return
 
-	def generate_perTranscript_expression_matrix(self, threads):
-		
-		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
-		print("\n\t{0} GENERATING THE PER-TRANSCRIPT EXPRESSION MATRIX".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		print("{0}  FeatureCounts per Transcript - Counting reads from the genome aligned data: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		featureCounts_gntr = " ".join([
-		"featureCounts",  # Call featureCounts
-		"-T", threads,  # Number of threads to be used by the script
-		"-g", "\'transcript_id\'",  # 
-		"-a", refAnnot,  # Annotation file in GTF/GFF format
-		"-L",  # Count long reads such as Nanopore and PacBio reads
-		"-o", os.path.join(postanalysis_dir, "genome_alignments_perTranscript_sum.tab"),
-		' '.join(genome_alignments),  # Input bam file
-		"2>>", os.path.join(postanalysis_dir, "featureCounts_genome_summary_perTranscript-report.txt")]) 
-		subprocess.run(featureCounts_gntr, shell=True)
-		
-		print("{0}  Exporting the per transcript (genomic) expression matrix: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		subprocess.run("cut -f1,7- {0}/genome_alignments_perTranscript_sum.tab | sed 1d > {0}/featureCounts_expression_perTranscript_matrix.txt".format(postanalysis_dir), shell=True)
+	def transcriptome_em_salmon(self, threads):
+		""" Quantifying transcriptome aligned data"""
+		transcriptome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.transcriptome.bam"))]
 
-		annot = {}
-		with open(refAnnot) as ref_in:
-			for i, line in enumerate(ref_in):
-				if not line.startswith("#"):
-					if line.split("\t")[2].strip() == 'transcript' or line.split("\t")[2].strip().endswith('tRNA'):
-						transcript_id = line.split("\t")[-1].split(";")[1].split(" ")[-1].strip("\"")
-						gene_id = line.split("\t")[-1].split(";")[0].split(" ")[-1].strip("\"")
-						gene_name = line.split("\t")[-1].split(";")[3].split(" ")[-1].strip("\"")
-						gene_type = [line.split("\t")[-1].split(";")[1].split()[1].strip("\"").strip() ,line.split("\t")[-1].split(";")[2].split()[1].strip("\"").strip()]\
-									[line.split("\t")[-1].split(";")[2].split()[0].strip()=="gene_type"]
-						annot[transcript_id] = [gene_id, gene_name, gene_type]
-
-		data = {}
-		header = []
-		with open("{0}/featureCounts_expression_perTranscript_matrix.txt".format(postanalysis_dir)) as mat_in:
-			for i, line in enumerate(mat_in, 1):
-				if i == 1:
-					header = line.split()
-				else:
-					transcript = line.strip().split()[0]
-					values = line.strip().split()[1:]
-					if not sum(map(int, values)) == 0:
-						data[(transcript, ' '.join(annot[transcript]))] = values
-		
-		# Remove paths from sample names
-		header = [elm.split("/")[-1].split(".")[0] for elm in header]
-		header.insert(1, "gene_id")  # Inserting gene_id in header
-		header.insert(2, "gene_name")  # Inserting gene_name in header
-		header.insert(3, "gene_type")  # Inserting gene_type in header
-		header[0] = "transcript_id"  # Replacing Geneid with transcript_id in header
-
-		# Writing output to file 'expression_matrix.csv'
-		with open("{0}/perTranscript_expression_matrix.csv".format(postanalysis_dir), "a") as fout:
-			fout.write("{0}\n".format(','.join(header)))
-			for key, values in data.items():
-				fout.write("{0},{1}\n".format(','.join(key), ','.join(values)))
-		return
-
-	def generate_expression_matrices_Salmon(self):
-		
-		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.transcriptome.bam"))]
 		print("{0}  Salmon quant (alignment-based) - Counting reads from the transcriptome aligned data: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		salmon_quant = " ".join([
-		"salmon quant",  # Call salmon quant
-		"--threads 6",  # 6 cores to be used
-		"--libType", "A",  # Format string describing the library type
-		"--targets", refTranscGRCh38,  #
-		"--geneMap", refAnnot,  # Annotation file in GTF format
-		"--alignments", ' '.join(genome_alignments),  # Input bam file
-		"--output", os.path.join(postanalysis_dir, "salmon_analysis_tr"),
-		"2>>", os.path.join(postanalysis_dir, "salmonQuant_transcriptome_summary-report.txt")]) 
-		subprocess.run(salmon_quant, shell=True)
+		for file in transcriptome_alignments:
+			sample = os.path.basename(file).split(".")[0]
+			salmon_analysis = os.path.join(postanalysis_dir, "salmon_analysis/{0}_expression_matrix".format(sample))
+			if not os.path.exists(salmon_analysis): os.makedirs(salmon_analysis)
+			salmon_quant = " ".join([
+			"salmon quant",  # Call salmon quant
+			"--threads", threads,  # The number of threads to use concurrently
+			"--noErrorModel",  # Turn off the alignment error model
+			"--targets", refTranscGRCh38,  # FASTA format file containing target transcripts
+			"--gencode",  # This flag will expect the input transcript fasta to be in GENCODE format
+			"--libType", "A",  # Format string describing the library type
+			"--geneMap", refAnnot,  # Annotation file in GTF format
+			"--alignments", file,  # Input bam file
+			"--output", salmon_analysis,  # Output dir
+			# "2>>", os.path.join(postanalysis_dir, "salmonQuant_transcriptome_summary-report.txt")
+			]) 
+			subprocess.run(salmon_quant, shell=True)
+		
+		# print("{0}  Salmon - Merging the output of Salmon quant and generating the final expression matrix: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+
 		return	
 
-	def novel_transcripts_detection(self):
+	def novel_transcripts_detection_talon(self, threads):
 		""" TALON takes transcripts from one or more long read datasets (SAM format) 
 		and assigns them transcript and gene identifiers based on a database-bound
 		annotation. Novel events are assigned new identifiers """
+		print("\n\t{0} ANNOTATION AND QUANTIFICATION USING TALON".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		talon_analysis = os.path.join(postanalysis_dir, 'talon_analysis')
+		if not os.path.exists(talon_analysis): os.makedirs(talon_analysis)
+
+		# Create config file that is needed for talon
+		csv_file = os.path.join(reports_dir,'talon_input.csv')
+		if not os.path.exists(csv_file):
+			print("{0}  Creating a description file necessary for Talon: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+			with open(csv_file, "w") as talon_out:
+				for path, subdir, folder in os.walk(alignments_dir):
+					for file in folder:
+						if file.endswith('.genome.bam'):
+							talon_out.write('dRNASeq_{0},{0},ONT,{1}\n'.format(file.split(".")[0], os.path.join(path, file).replace(".bam", ".sam")))
+							if not os.path.exists(os.path.join(path, file).replace(".bam", ".sam")):
+								print("{0}  Samtools - Converting the genomic bam files to sam for Talon: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+								os.system('samtools view -h -@ {0} {1} > {2}'.format(threads, os.path.join(path, file), os.path.join(path, file).replace(".bam", ".sam")))
+		
+		### First step: annotating and quantification of the reads
+		print("{0}  1/5 Talon - Annotating and quantification of the reads: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		talon_annotation = " ".join([
+		"talon",  # Call talon
+		"--threads", threads,  # Number of threads to be used by the script
+		"--db", talon_database,  # TALON database
+		"--build", 'hg38',  # Genome build (i.e. hg38) to use
+		"--o", os.path.join(talon_analysis, "talon_annot_n_quant"),  # Prefix for output files
+		"--f", csv_file,  # Dataset config file: dataset name, sample description, platform, sam file (comma-delimited)
+		"2>>", os.path.join(reports_dir, "talon_annotationNquantification-report.txt")]) 
+		# subprocess.run(talon_annotation, shell=True)
+		
+		### Second step: summarising how many of each transcript were found (prior to any filtering)
+		print("{0}  2/5 Talon - Summarising how many of each transcript were found (prior to any filtering): in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		talon_summary = " ".join([
+		"talon_summarize",  # Call talon_summarize
+		"--db", talon_database,  # TALON database
+		# "--groups", '',  # Genome build (i.e. hg38) to use
+		"--o", os.path.join(talon_analysis, "talon_summary"),  # Prefix for output file
+		"2>>", os.path.join(reports_dir, "talon_summary-report.txt")]) 
+		# subprocess.run(talon_summary, shell=True)
+		
+		### Third step: creating an abundance matrix without filtering (for use computing gene expression)
+		print("{0}  3/5 Talon - Creating an abundance matrix without filtering (for use computing gene expression): in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		talon_abundance = " ".join([
+		"talon_abundance",  # Call talon_abundance
+		"--db", talon_database,  # TALON database
+		"--build", 'hg38',  # Genome build (i.e. hg38) to use
+		"-a", "gencode_v31",  # Which annotation version to use
+		"--o", os.path.join(talon_analysis, "talon_abundance"),  # Prefix for output file
+		"2>>", os.path.join(reports_dir, "talon_abundance-report.txt")]) 
+		# subprocess.run(talon_abundance, shell=True)
+		"""
+		### Forth step: filtering the abundance matrix by requiring transcripts to be either 
+		### a) known, or b) detected in both replicates (for transcript-level expression)
+		print("{0}  4/5 Talon - Filtering the abundance matrix by keeping transcripts that are (a) known (b) detected in more than one sample: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		talon_filtering = " ".join([
+		"talon_filter_transcripts",  # Call talon_filter_transcripts
+		"--db", talon_database,  # TALON database
+		"--build", 'hg38',  # Genome build (i.e. hg38) to use
+		"-a", "gencode_v31",  # Which annotation version to use
+		"-p", ,  # A file indicating which datasets should be considered together
+		"--o", os.path.join(talon_analysis, "talon_filtered_transcripts.csv"),  # Prefix for output file
+		"2>>", os.path.join(reports_dir, "talon_filtering-report.txt")]) 
+		subprocess.run(talon_filtering, shell=True)
+		
+		### Fifth step: creating again the abundance table by using the filtered transcripts list
+		print("{0}  5/5 Talon - Creating again the abundance table by using the filtered transcripts list: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		talon_abundance_filtered = " ".join([
+		"talon_abundance",  # Call talon_abundance
+		"--db", talon_database,  # TALON database
+		"--build", 'hg38',  # Genome build (i.e. hg38) to use
+		"-a", "gencode_v31",  # Which annotation version to use
+		"--whitelist", os.path.join(talon_analysis, "talon_filtered_transcripts.csv"),  # Transcripts to be included in the output
+		"--o", os.path.join(talon_analysis, "talon_filtered_abundance"),  # Prefix for output file
+		"2>>", os.path.join(reports_dir, "talon_abundance_filtered-report.txt")]) 
+		subprocess.run(talon_abundance_filtered, shell=True)
+		"""
+		return
+
+	def novel_transcripts_detection_pinfish(self, threads):
+		print("\n\t{0} ANNOTATION AND QUANTIFICATION USING PINFISH".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		pinfish_analysis = os.path.join(postanalysis_dir, 'pinfish_analysis')
+		if not os.path.exists(pinfish_analysis): os.makedirs(pinfish_analysis)
+
+		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
+		print("{0}  1/4 Pinfish - Converting sorted BAM files containing spliced alignments: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		for file in genome_alignments:
+			pinfish_conv = " ".join([
+			"spliced_bam2gff",  # Calling spliced_bam2gff
+			"-M", file,  # Input from minimap2
+			"-t", threads,  # Number of cores to use
+			">", os.path.join(pinfish_analysis, "{0}.pinfish1.converted.rawgff".format(os.path.basename(file).split(".")[0])),  # output file
+			"2>>", os.path.join(reports_dir, "pinfish_conv-report.txt")]) 
+			subprocess.run(pinfish_conv, shell=True)
+
+		raw_gffs = [sum_file for sum_file in glob.glob(os.path.join(pinfish_analysis, "*.rawgff"))]
+		print("{0}  2/4 Pinfish - Clusterring together reads having similar exon/intron structure: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		for file in raw_gffs:
+			pinfish_cluster = " ".join([
+			"cluster_gff",  # Calling cluster_gff
+			"-t", threads,  # Number of cores to use
+			"-c 5",  # Minimum cluster size
+			"-a", os.path.join(pinfish_analysis, "{0}.pinfish2.clusters.tsv".format(os.path.basename(file).split(".")[0])),  # Write clusters in tabular format in this file
+			file,  # Raw transcripts in gff format
+			">", os.path.join(pinfish_analysis, "{0}.pinfish2.clustered_transcripts.clsgff".format(os.path.basename(file).split(".")[0])),  # output file
+			"2>>", os.path.join(reports_dir, "pinfish2_clusterring-report.txt")]) 
+			subprocess.run(pinfish_cluster, shell=True)
+
+		clustered_gffs = [sum_file for sum_file in glob.glob(os.path.join(pinfish_analysis, "*.clsgff"))]
+		print("{0}  3/4 Pinfish - Collapsing the clustered reads: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		for file in clustered_gffs:
+			pinfish_collapse = " ".join([
+			"collapse_partials",  # Calling cluster_gff
+			"-t", threads,  # Number of cores to use
+			file,  # Clustered transcripts in gff format
+			">", os.path.join(pinfish_analysis, "{0}.pinfish3.collapse_partials.clsgff.col".format(os.path.basename(file).split(".")[0])),  # output file
+			"2>>", os.path.join(reports_dir, "pinfish2_collapse_partials-report.txt")]) 
+			subprocess.run(pinfish_collapse, shell=True)
+
+		print("{0}  4/4 Pinfish - Polishing the detected transcript clusters: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		for file in genome_alignments:
+			pinfish_polish = " ".join([
+			"polish_clusters",  # Calling spliced_bam2gff
+			"-t", threads,  # Number of cores to use
+			"-c 5",  # Minimum cluster size
+			"-a", os.path.join(pinfish_analysis, "{0}.pinfish2.clusters.tsv".format(os.path.basename(file).split(".")[0])),  # Cluster memberships in tabular format
+			"-o", os.path.join(pinfish_analysis, "{0}.pinfish4.polclusters.fasta".format(os.path.basename(file).split(".")[0])),  # Output fasta file
+			file,  #
+			"2>>", os.path.join(reports_dir, "pinfish_polish-report.txt")]) 
+			subprocess.run(pinfish_polish, shell=True)
 
 		return
 
-	def clean_expression_dir(self):
+	def novel_transcripts_detection_flair(self, threads):
+		print("\n\t{0} ANNOTATION AND QUANTIFICATION USING FLAIR".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		flair_analysis = os.path.join(postanalysis_dir, 'flair_analysis')
+		if not os.path.exists(flair_analysis): os.makedirs(flair_analysis)
+
+		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
+		print("{0}  1/4 FLAIR - Converting BAM files to bed12: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		for file in genome_alignments:
+			flair_convert = " ".join([
+			"python3 /home/stavros/playground/progs/flair/bin/bam2Bed12.py",  # Calling bam2Bed12.py
+			file,  # Input BAM file
+			">", os.path.join(flair_analysis, "{0}.bed12".format(os.path.basename(file).split(".")[0])),  # output file
+			"2>>", os.path.join(reports_dir, "flair_convert-report.txt")]) 
+			subprocess.run(flair_convert, shell=True)
+
+		genome_alignments_bed12 = [sum_file for sum_file in glob.glob(os.path.join(flair_analysis, "*.bed12"))]
+		print("{0}  2/4 FLAIR correct - Correcting misaligned splice sites using genome annotations: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		for file in genome_alignments_bed12:
+			flair_correct = " ".join([
+			"python3 /home/stavros/playground/progs/flair/flair.py correct",  # Calling flair correct
+			"--gtf", refAnnot,  # GTF ref. annotation file
+			"--threads", threads,  # Number of cores to use
+			"--output", os.path.join(flair_analysis,'flair_correct'),  # Output name base
+			"--query", file,  # Uncorrected bed12 file
+			"2>>", os.path.join(reports_dir, "flair_correct-report.txt")]) 
+			subprocess.run(flair_correct, shell=True)
+
+		raw_gffs = [sum_file for sum_file in glob.glob(os.path.join(flair_analysis, "*.rawgff"))]
+		print("{0}  3/4 FLAIR collapse - Defining high-confidence isoforms from corrected reads: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		for file in raw_gffs:
+			flair_collapse = " ".join([
+			"python3 /home/stavros/playground/progs/flair/flair.py collapse",  # Calling flair collapse
+			"--threads", threads,  # Number of cores to use
+			"--gtf", refAnnot,  # GTF ref. annotation file
+			"--genome", refGenomeGRCh38,  # FastA of reference genome
+			file,  # Raw transcripts in gff format
+			"--output", os.path.join(flair_analysis, "{0}.flair.collapse.".format(os.path.basename(file).split(".")[0])),  # output file
+			"2>>", os.path.join(reports_dir, "flair_collapse-report.txt")]) 
+			subprocess.run(flair_collapse, shell=True)
+
+		print("{0}  4/4 FLAIR quantify - Quantification of FLAIR isoform usage across samples: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		fasta_collapsed = [sum_file for sum_file in glob.glob(os.path.join(flair_analysis, "*."))]
+		for file in fasta_collapsed:
+			flair_quantify = " ".join([
+			"python3 /home/stavros/playground/progs/flair/flair.py quantify",  # Calling flair quantify
+			"--threads", threads,  # Number of cores to use
+			"--reads_manifest", ,  # Tab delimited file containing: sample id, condition, batch, reads.fq
+			"--isoforms", file,  # Fasta input from FLAIR collapsed isoforms
+			"--tpm",  # TPM column
+			"--quality 10",  # Minimum MAPQ of read assignment to an isoform
+			"--output", os.path.join(flair_analysis, "flair_expression_matrix.tsv".format(os.path.basename(file).split(".")[0])),  # output file
+			"2>>", os.path.join(reports_dir, "flair_quantify-report.txt")]) 
+			subprocess.run(flair_quantify, shell=True)
+		return
+
+	def clean_expression_dirs(self):
 		os.system('mv {0}/*report.txt {1}'.format(postanalysis_dir, reports_dir))
 		os.system('mv {0}/*tab.summary {1}'.format(postanalysis_dir, reports_dir))
 		os.system('mv {0}/*sum.tab {1}'.format(postanalysis_dir, reports_dir))
