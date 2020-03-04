@@ -40,8 +40,8 @@ current_dir = os.getcwd()
 startTime = datetime.now()
 
 # Main folder hosting the analysis
-analysis_dir = os.path.join(current_dir, "batch3_analysis_TEST")
-# analysis_dir = os.path.join(current_dir, "analysis_batch3")
+# analysis_dir = os.path.join(current_dir, "batch3_analysis_TEST")
+analysis_dir = os.path.join(current_dir, "analysis")
 prepr_dir = os.path.join(analysis_dir, "preprocessed_data")
 alignments_dir = os.path.join(analysis_dir, "alignments")
 reports_dir = os.path.join(analysis_dir, "reports")
@@ -292,7 +292,7 @@ class expression_matrix:
 		# self.genome_perGene_em_featureCounts(threads)
 		# self.transcriptome_em_salmon(threads)
 		# self.novel_transcripts_detection_talon(threads)
-		# self.novel_transcripts_detection_pinfish(threads)
+		self.novel_transcripts_detection_pinfish(threads)
 		# self.novel_transcripts_detection_flair(threads)
 		# self.novel_transcripts_detection_sqanti2(threads)
 		# self.clean_expression_dirs()
@@ -613,7 +613,7 @@ class expression_matrix:
 		if not os.path.exists(flair_analysis): os.makedirs(flair_analysis)
 
 		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
-		print("{0}  1/4 FLAIR - Converting BAM files to bed12: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		print("{0}  1/ FLAIR - Converting BAM files to bed12: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		for file in genome_alignments:
 			flair_convert = " ".join([
 			"python3 /home/stavros/playground/progs/flair/bin/bam2Bed12.py",  # Calling bam2Bed12.py
@@ -623,19 +623,22 @@ class expression_matrix:
 			subprocess.run(flair_convert, shell=True)
 
 		genome_alignments_bed12 = [sum_file for sum_file in glob.glob(os.path.join(flair_analysis, "*.bed12"))]
-		print("{0}  2/4 FLAIR correct - Correcting misaligned splice sites using genome annotations: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		print("{0}  2/ FLAIR correct - Correcting misaligned splice sites using genome annotations: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		for file in genome_alignments_bed12:
 			flair_correct = " ".join([
 			"python3 /home/stavros/playground/progs/flair/flair.py correct",  # Calling flair correct
 			"--gtf", refAnnot,  # GTF ref. annotation file
 			"--threads", threads,  # Number of cores to use
-			"--output", os.path.join(flair_analysis,'flair_correct'),  # Output name base
+			"--output", os.path.join(flair_analysis,'flair_correct.'),  # Output name base
 			"--query", file,  # Uncorrected bed12 file
 			"2>>", os.path.join(reports_dir, "flair_correct-report.txt")]) 
 			subprocess.run(flair_correct, shell=True)
 
+		print("{0}  3/ FLAIR - combining all samples together by concatenating corrected read psl files together.: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+
+
 		raw_gffs = [sum_file for sum_file in glob.glob(os.path.join(flair_analysis, "*.rawgff"))]
-		print("{0}  3/4 FLAIR collapse - Defining high-confidence isoforms from corrected reads: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		print("{0}  4/ FLAIR collapse - Defining high-confidence isoforms from corrected reads: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		for file in raw_gffs:
 			flair_collapse = " ".join([
 			"python3 /home/stavros/playground/progs/flair/flair.py collapse",  # Calling flair collapse
@@ -647,19 +650,59 @@ class expression_matrix:
 			"2>>", os.path.join(reports_dir, "flair_collapse-report.txt")]) 
 			subprocess.run(flair_collapse, shell=True)
 
-		print("{0}  4/4 FLAIR quantify - Quantification of FLAIR isoform usage across samples: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		print("{0}  5/ FLAIR quantify - Quantification of FLAIR isoform usage across samples: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		fasta_collapsed = [sum_file for sum_file in glob.glob(os.path.join(flair_analysis, "*."))]
 		for file in fasta_collapsed:
 			flair_quantify = " ".join([
 			"python3 /home/stavros/playground/progs/flair/flair.py quantify",  # Calling flair quantify
 			"--threads", threads,  # Number of cores to use
-			"--reads_manifest", ,  # Tab delimited file containing: sample id, condition, batch, reads.fq
+			# "--reads_manifest", ,  # Tab delimited file containing: sample id, condition, batch, reads.fq
 			"--isoforms", file,  # Fasta input from FLAIR collapsed isoforms
 			"--tpm",  # TPM column
 			"--quality 10",  # Minimum MAPQ of read assignment to an isoform
-			"--output", os.path.join(flair_analysis, "flair_expression_matrix.tsv".format(os.path.basename(file).split(".")[0])),  # output file
+			"--output", os.path.join(flair_analysis, "flair_expression_matrix.tsv"),  # output file
 			"2>>", os.path.join(reports_dir, "flair_quantify-report.txt")]) 
 			subprocess.run(flair_quantify, shell=True)
+
+		print("{0}  6/ FLAIR DE - Differential Expression analysis using DRIMSeq: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		flair_de = " ".join([
+		"python3 /home/stavros/playground/progs/flair/flair.py diffExp",  # Calling flair diffExp
+		"--threads", threads,  # Number of cores to use
+		"--counts_matrix", os.path.join(flair_analysis, "flair_expression_matrix.tsv"),  # Tab-delimited isoform count matrix from flair quantify module
+		"--output", flair_analysis,  # output file
+		"2>>", os.path.join(reports_dir, "flair_de-report.txt")]) 
+		subprocess.run(flair_de, shell=True)
+
+		print("{0}  7/ FLAIR DS - Differential Splicing analysis using DRIMSeq: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		flair_ds = " ".join([
+		"python3 /home/stavros/playground/progs/flair/flair.py diffSplice",  # Calling flair diffSplice
+		"--threads", threads,  # Number of cores to use
+		"--counts_matrix", os.path.join(flair_analysis, "flair_expression_matrix.tsv"),  # Tab-delimited isoform count matrix from flair quantify module
+		# "--isoforms",,  # Isoforms in bed format
+		"--output", os.path.join(flair_analysis, "flair.diffsplice"),  # output file
+		"2>>", os.path.join(reports_dir, "flair_ds-report.txt")]) 
+		subprocess.run(flair_ds, shell=True)
+
+		print("{0}  8/ FLAIR predictProductivity - Annotated start codons to identify the longest ORF for each isoform for predicting isoform productivity: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		flair_predictProductivity = " ".join([
+		"python2 /home/stavros/playground/progs/flair/bin/predictProductivity.py",  # Calling flair predictProductivity.py
+		"--genome_fasta", refGenomeGRCh38,  # Fasta file containing transcript sequences.
+		"--longestORF",  # Defined ORFs by the longest open reading frame
+		"--gtf", refAnnot,  # Gencode annotation file
+		# "--input_isoforms", ,  #
+		">", os.path.join(flair_analysis, "productivity.bed"),  # output file
+		"2>>", os.path.join(reports_dir, "flair_predictProductivity-report.txt")]) 
+		subprocess.run(flair_predictProductivity, shell=True)
+
+		print("{0}  7/ FLAIR Visualisation - isoform structures and the percent usage of each isoform in each sample for a given gene: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		flair_ds = " ".join([
+		"python3 /home/stavros/playground/progs/flair/bin/plot_isoform_usage.py",  # Calling plot_isoform_usage.py
+		### isoforms.bed file from running predictProductivity.py
+		"--counts_matrix", os.path.join(flair_analysis, "flair_expression_matrix.tsv"),  # Tab-delimited isoform count matrix from flair quantify module
+		### GENENAME,
+		os.path.join(flair_analysis, "flair.isoform_usage."),  # output file
+		"2>>", os.path.join(reports_dir, "flair_ds-report.txt")]) 
+		subprocess.run(flair_ds, shell=True)
 		return
 
 	def novel_transcripts_detection_sqanti2(self, threads):
@@ -667,7 +710,7 @@ class expression_matrix:
 		sqanti2_analysis = os.path.join(postanalysis_dir, 'sqanti2_analysis')
 		if not os.path.exists(sqanti2_analysis): os.makedirs(sqanti2_analysis)
 
-		collapsed_unique_isoforms = [sum_file for sum_file in glob.glob(os.path.join(pinfish_analysis, "*.pinfish8.collapsed_unique_isoforms.fasta"))] = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
+		collapsed_unique_isoforms = [sum_file for sum_file in glob.glob(os.path.join(pinfish_analysis, "*.pinfish8.collapsed_unique_isoforms.fasta"))]
 		print("{0}  2/2 SQANTI2 - Converting sorted BAM files containing spliced alignments: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		for file in collapsed_unique_isoforms:
 			sqanti_qc2 = " ".join([
@@ -831,8 +874,8 @@ def summary(num_of_files):
 
 def main():
 	
-	# chosen_samples = ("NonTransf_1",  "NonTransf_2",  "NonTransf_3", "Tumour_1",  "Tumour_2",  "Tumour_3")
-	chosen_samples = ("Tumour_1", "Tumour_2")
+	chosen_samples = ("NonTransf_1",  "NonTransf_2",  "NonTransf_3", "Tumour_1",  "Tumour_2",  "Tumour_3")
+	# chosen_samples = ("Tumour_1", "Tumour_2")
 
 	summary_files = [str(file_path) for file_path in Path(ont_data).glob('**/sequencing_summary.txt')]
 	num_of_samples = len(summary_files)
@@ -841,19 +884,15 @@ def main():
 		raw_data_dir = os.path.dirname(str(sum_file))
 		sample_id = os.path.basename(raw_data_dir)
 
-		# quality_control(i, sum_file, sample_id, raw_data_dir)
+		quality_control(i, sum_file, sample_id, raw_data_dir)
 
-		# alignment_against_ref(i, sample_id, raw_data_dir)
+		alignment_against_ref(i, sample_id, raw_data_dir)
 
-	# mapping_qc()
+	mapping_qc()
 
-	expression_matrix(args.threads)
+	# expression_matrix(args.threads)
 
 	# summary(num_of_samples)
-
-	# 
-
-	# 
 
 	print('\t--- The pipeline finisded after {0} ---'.format(datetime.now() - startTime))
 if __name__ == "__main__": main()
