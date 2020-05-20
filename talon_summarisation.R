@@ -14,9 +14,9 @@ if (length(args) == 3) {
   quit()
 }
 
-outdir <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/batch3_output_for_presentation/talon_analysis/"
-matrix <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/batch3_output_for_presentation/talon_analysis/talon_abundance_talon_abundance.tsv"
-input_groups <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/batch3_output_for_presentation/talon_analysis/talon_input.csv"
+# outdir <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/batch3_output_for_presentation/talon_analysis/"
+# matrix <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/batch3_output_for_presentation/talon_analysis/talon_abundance_talon_abundance.tsv"
+# input_groups <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/batch3_output_for_presentation/talon_analysis/talon_input.csv"
 
 library("dplyr")
 library("plotly")
@@ -35,7 +35,7 @@ print(paste("Total number of input transcripts:", initial_transcripts, sep=" " )
 # Obtain number of input samples
 n <- length(expr_file[ ,12:length(expr_file)])
 # Applying basic filterring step 
-filter <- 20 #3*n
+filter <- 3*n
 filtered_table <- expr_file[rowSums(expr_file[ ,12:length(expr_file)]) > filter, ]
 filtered_transcripts <- data.frame(filtered_transcripts = nrow(filtered_table))
 print(paste("Applying basic filtering step. Transcripts with less counts than", filter, "in all", n, "samples are being discarded.", sep=" " ))
