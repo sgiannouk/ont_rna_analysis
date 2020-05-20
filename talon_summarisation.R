@@ -14,9 +14,9 @@ if (length(args) == 3) {
   quit()
 }
 
-# outdir <- "//Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/check_post_analysis_quality_controls/output"
-# matrix <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/check_post_analysis_quality_controls/talon_abundance_talon_abundance.tsv"
-# input_groups <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/check_post_analysis_quality_controls/talon_input.csv"
+outdir <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/batch3_output_for_presentation/talon_analysis/"
+matrix <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/batch3_output_for_presentation/talon_analysis/talon_abundance_talon_abundance.tsv"
+input_groups <- "/Users/stavris/Desktop/Projects/silvia_ont_umc/check/batch3/batch3_output_for_presentation/talon_analysis/talon_input.csv"
 
 library("dplyr")
 library("plotly")
@@ -35,22 +35,25 @@ print(paste("Total number of input transcripts:", initial_transcripts, sep=" " )
 # Obtain number of input samples
 n <- length(expr_file[ ,12:length(expr_file)])
 # Applying basic filterring step 
-filter <- 3*n  # Filtering threshold for removing very low abundant entries (3 * number_of_samples)
-filtered_table <- expr_file[rowSums(expr_file[ ,12:length(expr_file)]) > filter, ]  # Applying the filter 
-filtered_transcripts <- data.frame(filtered_transcripts = nrow(filtered_table))  # Obtaining the number of transcripts after applying the filter
+filter <- 20 #3*n
+filtered_table <- expr_file[rowSums(expr_file[ ,12:length(expr_file)]) > filter, ]
+filtered_transcripts <- data.frame(filtered_transcripts = nrow(filtered_table))
 print(paste("Applying basic filtering step. Transcripts with less counts than", filter, "in all", n, "samples are being discarded.", sep=" " ))
 print(paste("Total number of transcripts after filtering:", filtered_transcripts, sep=" " ))
 
-# Obtaining the annotation to export the stats 
+# Obtaining the important annotation to export the stats 
 filt_table_overview  <- filtered_table[,3:11]
 # Output the overview stats
 write.csv(filt_table_overview, file=paste(outdir,"talon_filtered_table.csv",sep="/"), quote=F, row.names=F)
-rm(expr_file, matrix)
+# Output the filtered expression matrix
+filtered_matrix <- filtered_table[ ,3:length(filtered_table)]
+write.csv(filtered_matrix, file=paste(dirname(outdir),"talon_abundance_filt.csv",sep="/"), quote=F, row.names=F)
+rm(expr_file, matrix, filtered_matrix)
 
 ################## OVERALL ANALYSIS ################## 
 # Extracting basic stats
-unique_genes <- data.frame(unique_genes = length(unique(filt_table_overview$annot_gene_id)))  # Unique gene names found in the annot_gene_id column
-unique_transcripts <- data.frame(unique_transcripts = length(unique(filt_table_overview$annot_transcript_id)))  # Unique transcript names found in the annot_transcript_id column
+unique_genes <- data.frame(unique_genes = length(unique(filt_table_overview$annot_gene_id)))
+unique_transcripts <- data.frame(unique_transcripts = length(unique(filt_table_overview$annot_transcript_id)))
 gene_novelty <- count(filt_table_overview[!duplicated(filt_table_overview$annot_gene_id), ], gene_novelty)
 transcript_novelty <- count(filt_table_overview, transcript_novelty)
 
@@ -164,15 +167,11 @@ for(i in 1:length(samplegroup)) {
       selected_samples <-as.character(groups$V1[which(groups$V2==samplegroup[i])])
       group_name <- samplegroup[i]  # Group 
       
-      # Selecting the matching columns 
-      selected_filtered_table <- data.frame(filtered_table[1:(length(filtered_table)-n)], subset(filtered_table, select = selected_samples))
+      # Selecting the matching columns
+      selected_filtered_table <- data.frame(filtered_table[1:(length(filtered_table)-n)], filtered_table[ ,selected_samples])
       initial_transcripts <- nrow(selected_filtered_table)
       # Filter 0 rows
-      if (length(selected_samples) == 1) {
-        selected_filtered_table <- selected_filtered_table[selected_filtered_table[ ,12] > 0, ]
-      } else {
-        selected_filtered_table <- selected_filtered_table[rowSums(selected_filtered_table[ ,12:(11+length(selected_samples))]) > 0, ] 
-      }
+      selected_filtered_table <- selected_filtered_table[rowSums(selected_filtered_table[ ,12:(11+length(selected_samples))]) > 0, ]
       filtered_transcripts <- nrow(selected_filtered_table)
       # Output the overview stats
       write.csv(selected_filtered_table, file=paste(outdir, paste("talon", group_name, "selected_filtered_table.csv", sep="_"),sep="/"), quote=F, row.names=F)
