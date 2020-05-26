@@ -12,15 +12,15 @@ import shutil, time, glob, sys, os, re
 ont_data =  "/home/stavros/playground/ont_basecalling/guppy_v3_basecalling"
 
 refGenomeGRCh38 = "/home/stavros/references/reference_genome/GRCh38_GencodeV31_primAssembly/GRCh38.primary_assembly.genome.fa"
+refGenomeGRCh38_traclean = "/home/stavros/references/reference_genome/GRCh38_GencodeV31_primAssembly/GRCh38.primary_assembly.genome.edited.fa"
 refTranscGRCh38_ensembl = "/home/stavros/references/reference_transcriptome/Ensembl/GRCh38.cdna.ncrna.fa"
 refAnnot = "/home/stavros/references/reference_annotation/GRCh38_gencode.v31.primary_assembly.annotation.gtf"
 refAnnot_ensembl = "/home/stavros/references/reference_annotation/Ensembl/Homo_sapiens.GRCh38.99.gtf"
 reference_annotation_bed = "/home/stavros/references/reference_annotation/hg38_gencode.v31.allComprehensive_pseudo.annotation.bed"
 
 talon_database = "/home/stavros/playground/progs/TALON/talon_db/talon_gencode_v31.db"  ### TALON
-CAGE_Peak_hg38_genome = "/home/stavros/playground/progs/SQANTI2/supplementary_files_hg38/hg38.cage_peak_phase1and2combined_coord.bed.gz"  ### SQANTI2
-Intropolis_Junction_BED_file = "/home/stavros/playground/progs/SQANTI2/supplementary_files_hg38/intropolis.v1.hg19_with_liftover_to_hg38.tsv.min_count_10.modified.gz"  ### SQANTI2
-polyA_motif_list = "/home/stavros/playground/progs/SQANTI2/supplementary_files_hg38/human.polyA.list.txt"  ### SQANTI2
+transcriptclean = "python3 /home/stavros/playground/progs/TranscriptClean/TranscriptClean.py"  ### TranscriptClean
+sj_ref = "/home/stavros/playground/progs/TranscriptClean/GRCh38_SJs.ref"  ### TranscriptClean ref. SJ
 chrom_size = "/home/stavros/references/reference_genome/GRCh38_GencodeV31_primAssembly/chrom_lenghts.tsv"   ### FLAIR
 
 
@@ -43,7 +43,7 @@ current_dir = os.getcwd()
 startTime = datetime.now()
 
 # Main folder hosting the analysis
-analysis_dir = os.path.join(current_dir, "analysis")
+analysis_dir = os.path.join(current_dir, "analysis2_may24")
 prepr_dir = os.path.join(analysis_dir, "preprocessed_data")
 alignments_dir = os.path.join(analysis_dir, "alignments")
 reports_dir = os.path.join(analysis_dir, "reports")
@@ -263,12 +263,8 @@ class expression_matrix:
 		if not os.path.exists(expression_analysis_dir): os.makedirs(expression_analysis_dir)
 		
 		self.genome_perGene_em_featureCounts(threads)
-		self.transcriptome_em_salmon(threads)
 		self.novel_transcripts_detection_talon(threads)
-		self.novel_transcripts_detection_pinfish(threads)
 		self.novel_transcripts_detection_flair(threads, chosen_samples)
-		self.novel_transcripts_detection_sqanti2(threads, chosen_samples)
-		# self.clean_expression_dirs()
 		return
 
 	def genome_perGene_em_featureCounts(self, threads):
@@ -351,58 +347,32 @@ class expression_matrix:
 		subprocess.run(gene_type_sum, shell=True)
 		return
 
-	def transcriptome_em_salmon(self, threads):
-		""" Quantifying transcriptome aligned data"""
-		print("\n\t{0} GENERATING THE PER-TRANSCRIPT EXPRESSION MATRIX".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		transcriptome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.transcriptome.bam"))]
-
-		print("{0}  Salmon quant (alignment-based) - Counting reads from the transcriptome aligned data: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		for file in transcriptome_alignments:
-			sample = os.path.basename(file).split(".")[0]
-			salmon_analysis = os.path.join(expression_analysis_dir, "salmon_transcriptome_analysis/{0}_expression_matrix".format(sample))
-			if not os.path.exists(salmon_analysis): os.makedirs(salmon_analysis)
-			salmon_quant = " ".join([
-			"salmon quant",  # Call salmon quant
-			"--threads", threads,  # The number of threads to use concurrently
-			"--noErrorModel",  # Turn off the alignment error model
-			"--targets", refTranscGRCh38_ensembl,  # FASTA format file containing target transcripts
-			# "--gencode",  # This flag will expect the input transcript fasta to be in GENCODE format
-			"--libType", "A",  # Format string describing the library type
-			"--geneMap", refAnnot_ensembl,  # Annotation file in GTF format
-			"--alignments", file,  # Input bam file
-			"--output", salmon_analysis,  # Output dir
-			"--quiet",  # Be quiet while doing quantification
-			"2>>", os.path.join(pipeline_reports, "salmonQuant_transcriptome_summary-report.txt")])  # Directory where all reports reside
-			subprocess.run(salmon_quant, shell=True)
-		
-		# print("{0}  Salmon - Merging the output of Salmon quant and generating the final expression matrix: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		return	
-
 	def novel_transcripts_detection_talon(self, threads):
 		""" TALON takes transcripts from one or more long read datasets (SAM format) 
 		and assigns them transcript and gene identifiers based on a database-bound
 		annotation. Novel events are assigned new identifiers """
 		print("\n\t{0} ANNOTATION AND QUANTIFICATION USING TALON".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		talon_analysis = os.path.join(expression_analysis_dir, 'talon_analysis')
-		if not os.path.exists(talon_analysis): os.makedirs(talon_analysis)
+		temp = os.path.join(talon_analysis, 'transcriptClean_temp')
+		if not os.path.exists(temp): os.makedirs(temp)
 
-		# Create config file that is needed for talon
+		# Create config file that is needed for talon and converting the aligned bam files to sam
 		csv_file = os.path.join(talon_analysis,'talon_input.csv')
-		if not os.path.exists(csv_file):
+		if not os.path.exists(csv_file) or os.stat(csv_file).st_size == 0:
 			print("{0}  Creating a description file necessary for Talon: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 			with open(csv_file, "w") as talon_out:
 				for path, subdir, folder in os.walk(alignments_dir):
-					for file in folder:
+					for file in sorted(folder):
 						if file.endswith('.genome.bam'):
 							# Output a csv file with 'sample_id, sample_group, technology, input_labeled_sam_file' which is gonna be needed in talon_annotation function
-							talon_out.write('{0},{1},ONT,{2}\n'.format(file.split(".")[0], file.split(".")[0].split("_")[0], os.path.join(talon_analysis, file).replace(".genome.bam", "_labeled.sam")))
+							talon_out.write('{0},{1},ONT,{2}\n'.format(file.split(".")[0], file.split(".")[0].split("_")[0], os.path.join(temp, file).replace(".genome.bam", ".clean_labeled.sam")))
 							if not os.path.exists(os.path.join(path, file).replace(".bam", ".sam")):
 								print("{0}  Samtools - Converting the genomic bam file ({1}) to sam for Talon: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M"), file))
 								os.system('samtools view -h -@ {0} {1} > {2}'.format(threads, os.path.join(path, file), os.path.join(path, file).replace(".bam", ".sam")))
 
-
+		
 		### Initial step: Building the reference database
-		print("{0} 1/7 TALON - Initiating the database: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		print("{0} 1/ TALON - Initiating the database: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		if os.path.exists(talon_database): os.remove(talon_database)
 		talon_initialize_database = " ".join([
 		"talon_initialize_database",  # Call talon_initialize_database
@@ -413,9 +383,26 @@ class expression_matrix:
 		"2>>", os.path.join(pipeline_reports, "talon1_initialize_database-report.txt")])  # Directory where all reports reside
 		subprocess.run(talon_initialize_database, shell=True)
 
-		### Second step: internal priming check
-		print("{0}  2/7 TALON - Run talon_label_reads on each file to compute how likely each read is to be an internal priming product: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.sam"))]
+
+		### Second step: Correcting mismatches, microindels, and noncanonical splice junctions in long reads that have been mapped to the genome
+		sam_files = glob.glob(os.path.join(alignments_dir, "*.genome.sam"))
+		print("{0} 2/ TranscriptClean - Correcting mismatches, microindels, and noncanonical splice junctions in long reads: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		for file in sam_files:
+			TranscriptClean = " ".join([
+			transcriptclean,  # Call TranscriptClean.py
+			"--sam", file,  # Input sam file
+			"--genome", refGenomeGRCh38_traclean,  # Reference genome fasta file
+			"--threads", threads,  # Number of threads to be used by the script
+			"--spliceJns", sj_ref,  # Splice junction file extracted from the ref. GTF
+			"--deleteTmp",  # the temporary directory (TC_tmp) will be removed
+			"--outprefix", os.path.join(temp, os.path.basename(file).split(".")[0]),  # Outprefix for the outout file
+			"2>>", os.path.join(pipeline_reports, "talon2_transcriptclean-report.txt")])  # Directory where all reports reside
+			subprocess.run(TranscriptClean, shell=True)
+			os.remove(file)
+
+		### Third step: internal priming check
+		print("{0}  3/ TALON - Run talon_label_reads on each file to compute how likely each read is to be an internal priming product: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(temp, "*clean.sam"))]
 		for file in genome_alignments:
 			talon_priming_check = " ".join([
 			"talon_label_reads",  # Call talon talon_label_reads
@@ -424,189 +411,111 @@ class expression_matrix:
 			"--g", refGenomeGRCh38,  # Reference genome fasta file
 			"--tmpDir", os.path.join(talon_analysis, "tmp_label_reads"),  # Path to directory for tmp files
 			"--deleteTmp",  # Temporary directory will be removed
-			"--o", os.path.join(talon_analysis, os.path.basename(file).replace(".genome.sam","")),  # Prefix for output files
-			"2>>", os.path.join(pipeline_reports, "talon2_talon_priming_check-report.txt")])  # Directory where all reports reside
+			"--o", os.path.join(temp, os.path.basename(file).replace("_clean.sam",".clean")),  # Prefix for output files
+			"2>>", os.path.join(pipeline_reports, "talon3_talon_priming_check-report.txt")])  # Directory where all reports reside
 			subprocess.run(talon_priming_check, shell=True)
 
-		### Third step: annotating and quantification of the reads
-		print("{0}  3/7 TALON - Annotating and quantification of the reads: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		### Fourth step: annotating and quantification of the reads
+		print("{0}  4/ TALON - Annotating and quantification of the reads: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		talon_annotation = " ".join([
 		"talon",  # Call talon
 		"--threads", threads,  # Number of threads to be used by the script
 		"--db", talon_database,  # TALON database
 		"--build", 'hg38',  # Genome build (i.e. hg38) to use
-		"--o", os.path.join(talon_analysis, "talon_annot_n_quant"),  # Prefix for output files
+		"--o", os.path.join(talon_analysis, "prefilt"),  # Prefix for output files
 		"--f", csv_file,  # Dataset config file: dataset name, sample description, platform, sam file (comma-delimited)
-		"2>>", os.path.join(pipeline_reports, "talon3_annotationNquantification-report.txt")])  # Directory where all reports reside
+		"2>>", os.path.join(pipeline_reports, "talon4_annotationNquantification-report.txt")])  # Directory where all reports reside
 		subprocess.run(talon_annotation, shell=True)
 		
-		### Fourth step: summarising how many of each transcript were found (prior to any filtering)
-		print("{0}  4/7 TALON - Summarising how many of each transcript were found (prior to any filtering): in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		### Fifth step: summarising how many of each transcript were found (prior to any filtering)
+		print("{0}  5/ TALON - Summarising how many of each transcript were found (prior to any filtering): in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		talon_summary = " ".join([
 		"talon_summarize",  # Call talon_summarize
 		"--db", talon_database,  # TALON database
-		"--o", os.path.join(talon_analysis, "talon_summary"),  # Prefix for output file
-		"2>>", os.path.join(pipeline_reports, "talon4_summary-report.txt")])  # Directory where all reports reside
+		"--o", os.path.join(talon_analysis, "prefilt"),  # Prefix for output file
+		"2>>", os.path.join(pipeline_reports, "talon5_summary-report.txt")])  # Directory where all reports reside
 		subprocess.run(talon_summary, shell=True)
 		
-		### Fifth step: creating an abundance matrix without filtering (for use computing gene expression)
-		print("{0}  5/7 TALON - Creating an abundance matrix without filtering (for use computing gene expression): in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		### Sixth step: creating an abundance matrix without filtering (for use computing gene expression)
+		print("{0}  6/ TALON - Creating an abundance matrix without filtering (gene expression): in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		talon_abundance = " ".join([
 		"talon_abundance",  # Call talon_abundance
 		"--db", talon_database,  # TALON database
 		"--build", 'hg38',  # Genome build (i.e. hg38) to use
 		"--annot", talon_database[:-3],  # Which annotation version to use
-		"--o", os.path.join(talon_analysis, "talon_abundance"),  # Prefix for output file
-		"2>>", os.path.join(pipeline_reports, "talon5_abundance-report.txt")])  # Directory where all reports reside
+		"--o", os.path.join(talon_analysis, "prefilt"),  # Prefix for output file
+		"2>>", os.path.join(pipeline_reports, "talon6_abundance-report.txt")])  # Directory where all reports reside
 		subprocess.run(talon_abundance, shell=True)
-		
-		### Sixth step: Applying basic filtering steps and outputting several stats
+
+		### Seventh step: Applying basic filtering steps and outputting several stats
+		print("{0}  7/ TALON - Filtering low abundance transcripts: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		talon_filter = " ".join([
+		"talon_filter_transcripts",  # Call talon_filter_transcripts
+		"--db", talon_database,  # TALON database
+		"--annot", talon_database[:-3],  # Which annotation version to use
+		"--minCount 8",  # Number of minimum occurrences required for a novel transcript PER dataset
+		"--maxFracA 0.5",  # All of the supporting reads must have 50% or fewer As in the 20 bp interval after alignment
+		"--o", os.path.join(talon_analysis, "filtered_isoforms.csv"),  # Output
+		"2>>", os.path.join(pipeline_reports, "talon7_talon_filter-report.txt")])  # Directory where all reports reside
+		subprocess.run(talon_filter, shell=True)
+
+		### Eighth step: Applying basic filtering steps and outputting several stats
 		R_analysis = os.path.join(talon_analysis, "R_analysis")
 		if not os.path.exists(R_analysis): os.makedirs(R_analysis)
-		print("{0}  6/7 TALON - : in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		print("{0}  8/ TALON - Removing low abundance isoforms based on step 8 and exporting basic statsistics: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		talon_filter_n_report = " ".join([
 		"Rscript",  # Call Rscript
 		"talon_summarisation.R",  # TALON summarisation script
-		os.path.join(talon_analysis, "talon_abundance_talon_abundance.tsv"),  # Input matrix
+		os.path.join(talon_analysis, "prefilt_talon_abundance.tsv"),  # Input matrix
 		R_analysis,  # Output directory
 		os.path.join(talon_analysis, "talon_input.csv"),  # Input annotation matrix
-		"2>>", os.path.join(pipeline_reports, "talon5_summarisation.txt")])  # Directory where all reports reside
+		os.path.join(talon_analysis, "filtered_isoforms.csv"),  # Filtered transcripts to maintain
+		"2>>", os.path.join(pipeline_reports, "talon8_summarisation.txt")])  # Directory where all reports reside
 		subprocess.run(talon_filter_n_report, shell=True)
 
-		# # talon_filtered_tables = os.path.join(talon_analysis,'talon_filtered_tables.csv')
-		# # if not os.path.exists(talon_filtered_tables):
-		# # 	filtered_files = []
-		# # 	print("{0}  Creating a description file necessary for generating TALON report: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		# # 	for path, subdir, folder in os.walk(R_analysis):
-		# # 		for file in folder:
-		# # 			if file.endswith('selected_filtered_table.csv'):
-		# # 				filtered_files.append(os.path.join(path, file))
-		# # 	with open(talon_filtered_tables, "w") as tout:
-		# # 		tout.write('{0},{1}'.format(filtered_files[0], filtered_files[1]))
+		### Ninth step: Generating TALON report for each dataset
+		print("{0}  9/ TALON - Generating TALON report for each dataset: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		for file in sam_files:
+			sample_name = os.path.basename(file).split(".")[0]
+			output_dir = os.path.join(R_analysis, "{0}_talon_reports".format(sample_name))
+			if not os.path.exists(output_dir): os.makedirs(output_dir)
+			talon_report = " ".join([
+			"talon_generate_report",  # Call talon_abundance
+			"--db", talon_database,  # TALON database
+			"--whitelists", os.path.join(talon_analysis, "filtered_isoforms.csv"),  # Filtered transcripts to be reported
+			"--datasets", sample_name,  # Input of the filtered tables produced on the previous step
+			"--outdir", output_dir,  # Output dir
+			"2>>", os.path.join(pipeline_reports, "talon9_generate_report-report.txt")])  # Directory where all reports reside
+			subprocess.run(talon_report, shell=True)
 
-		# # ### Sixth step: Generating TALON report for the two groups
-		# # print("{0}  7/7 TALON - : in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		# # # with open()
-		# # talon_report = " ".join([
-		# # "talon_generate_report",  # Call talon_abundance
-		# # "--db", talon_database,  # TALON database
-		# # "--datasets", talon_filtered_tables,  # Input of the filtered tables produced on the previous step
-		# # "--outdir", os.path.join(talon_analysis, "talon_reports"),  # Output dir
-		# # "2>>", os.path.join(pipeline_reports, "talon7_generate_report-report.txt")])  # Directory where all reports reside
-		# # subprocess.run(talon_report, shell=True)
-		return
+		### Tenth step: Obtaining the TALON database in GTF format
+		print("{0}  10/ TALON - Obtaining the transcriptome annotation from the TALON database: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		talon_export_db = " ".join([
+		"talon_create_GTF",  # Call talon_create_GTF
+		"--db", talon_database,  # TALON database
+		"--build hg38",  # Genome build (hg38) to use
+		"--annot", talon_database[:-3],  # Which annotation version to use
+		"--whitelist", os.path.join(talon_analysis, "filtered_isoforms.csv"),  # Filtered transcripts to be reported
+		"--o", os.path.join(talon_analysis, "database"),  # Output
+		"2>>", os.path.join(pipeline_reports, "talon10_export_db-report.txt")])  # Directory where all reports reside
+		subprocess.run(talon_export_db, shell=True)
 
-	def novel_transcripts_detection_pinfish(self, threads):
-		print("\n\t{0} ANNOTATION AND QUANTIFICATION USING PINFISH".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		pinfish_analysis = os.path.join(expression_analysis_dir, 'pinfish_analysis')
-		if not os.path.exists(pinfish_analysis): os.makedirs(pinfish_analysis)
-
-		genome_alignments = [sum_file for sum_file in glob.glob(os.path.join(alignments_dir, "*.genome.bam"))]
-		print("{0}  1/10 Pinfish - Converting sorted BAM files containing spliced alignments: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		for file in genome_alignments:
-			pinfish_conv = " ".join([
-			"spliced_bam2gff",  # Calling spliced_bam2gff
-			"-t", threads,  # Number of cores to use
-			"-M", file,  # Input from minimap2
-			">", os.path.join(pinfish_analysis, "{0}.pinfish1.converted.rawgff".format(os.path.basename(file).split(".")[0])),  # output file
-			"2>>", os.path.join(pipeline_reports, "pinfish1_conv-report.txt")])  # Directory where all reports reside
-			subprocess.run(pinfish_conv, shell=True)
-
-		raw_gffs = [sum_file for sum_file in glob.glob(os.path.join(pinfish_analysis, "*.rawgff"))]
-		print("{0}  2/10 Pinfish - Clusterring together reads having similar exon/intron structure: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		for file in raw_gffs:
-			pinfish_cluster = " ".join([
-			"cluster_gff",  # Calling cluster_gff
-			"-t", threads,  # Number of cores to use
-			"-c 10",  # Minimum cluster size
-			"-a", os.path.join(pinfish_analysis, "{0}.pinfish2.clusters.tsv".format(os.path.basename(file).split(".")[0])),  # Write clusters in tabular format in this file
-			file,  # Raw transcripts in gff format
-			">", os.path.join(pinfish_analysis, "{0}.pinfish2.clustered_transcripts.clsgff".format(os.path.basename(file).split(".")[0])),  # output file
-			"2>>", os.path.join(pipeline_reports, "pinfish2_clusterring-report.txt")])  # Directory where all reports reside
-			subprocess.run(pinfish_cluster, shell=True)
-
-		print("{0}  3/10 Pinfish - Polishing the detected transcript clusters: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		for file in genome_alignments:
-			pinfish_polish = " ".join([
-			"polish_clusters",  # Calling spliced_bam2gff
-			"-c 10",  # Minimum cluster size
-			"-t", threads,  # Number of cores to use
-			"-a", os.path.join(pinfish_analysis, "{0}.pinfish2.clusters.tsv".format(os.path.basename(file).split(".")[0])),  # Cluster memberships in tabular format
-			"-o", os.path.join(pinfish_analysis, "{0}.pinfish3.polclusters.fasta".format(os.path.basename(file).split(".")[0])),  # Output fasta file
-			file,  # Inout bam file
-			"2>>", os.path.join(pipeline_reports, "pinfish3_polish-report.txt")])  # Directory where all reports reside
-			subprocess.run(pinfish_polish, shell=True)
-
-		polished_fasta = [sum_file for sum_file in glob.glob(os.path.join(pinfish_analysis, "*.pinfish3.polclusters.fasta"))]
-		print("{0}  4/10 Pinfish - Minimap2 - Mapping polisehed data against the reference genome: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		### ALIGN THE POLISHED READS AGAINST THE REFERENCE GENOME
-		for file in polished_fasta:
-			sample_id = os.path.basename(file).split(".")[0]
-			minimap2_genome = " ".join([
-			"minimap2",  # Call minimap2 (v2.17-r941)
-			"-t", threads,  # Number of threds to use
-			"-ax splice",   # Long-read spliced alignment mode and output in SAM format (-a)
-			"-k 14",  # k-mer size
-			"-uf",  # Find canonical splicing sites GT-AG - f: transcript strand
-			"--secondary=no",  # Do not report any secondary alignments
-			"--MD",  # output the MD tag
-			refGenomeGRCh38,  # Inputting the reference genome
-			file,  # Input .fastq.gz file
-			"| samtools sort",  # Calling 'samtools sort' to sort the output alignment file
-			"--threads", threads,  # Number of threads to be used by 'samtools sort'
-			"--output-fmt BAM",  # Output in BAM format
-			"-o", os.path.join(pinfish_analysis, "{0}.polihed.genome.bam".format(sample_id)), "-",  # Sorted output  BAM file
-			"2>>", os.path.join(pipeline_reports, "pinfish4_minimap2_genome-report.txt")])  # Directory where all reports reside
-			subprocess.run(minimap2_genome, shell=True)
-			subprocess.run('samtools index -@ {0} {1}'.format(threads, os.path.join(pinfish_analysis, "{0}.polihed.genome.bam".format(sample_id))), shell=True)
+		# ### Eleventh step: Differential Expression analysis
+		# print("{0}  11/ TALON - Differential Expression analysis ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		# R_DE_analysis = os.path.join(R_analysis, "differential_expression")
+		# if not os.path.exists(R_DE_analysis): os.makedirs(R_DE_analysis)
+		# de_analysis = " ".join([
+		# "Rscript",  # Call Rscript
+		# "talon_diff_expr_anaysis.R",  # talon_diff_expr_anaysis script
+		# os.path.join(talon_analysis, "filt_talon_abundance.tsv"),  # Input filtered matrix
+		# os.path.join(talon_analysis, "talon_input.csv"),  # Input annotation matrix
+		# R_DE_analysis,  # Output directory
+		# "2>>", os.path.join(pipeline_reports, "talon11_de_analysis-report.txt")])  # Directory where all reports reside
+		# subprocess.run(de_analysis, shell=True)
 		
-		polished_alignments = [sum_file for sum_file in glob.glob(os.path.join(pinfish_analysis, "*.polihed.genome.bam"))]
-		print("{0}  5/10 Pinfish - Converting sorted BAM files containing spliced alignments: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		for file in polished_alignments:
-			pinfish_conv_polished = " ".join([
-			"spliced_bam2gff",  # Calling spliced_bam2gff
-			"-t", threads,  # Number of cores to use
-			"-M", file,  # Input from minimap2
-			">", os.path.join(pinfish_analysis, "{0}.pinfish5.converted_polished.rawgff".format(os.path.basename(file).split(".")[0])),  # output file
-			"2>>", os.path.join(pipeline_reports, "pinfish5_conv-report.txt")])  # Directory where all reports reside
-			subprocess.run(pinfish_conv_polished, shell=True)
-
-		clustered_polised_gffs = [sum_file for sum_file in glob.glob(os.path.join(pinfish_analysis, "*.pinfish5.converted_polished.rawgff"))]
-		print("{0}  6/10 Pinfish - Collapsing the clustered reads: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		for file in clustered_polised_gffs:
-			pinfish_collapse_polished = " ".join([
-			"collapse_partials",  # Calling cluster_gff
-			"-t", threads,  # Number of cores to use
-			file,  # Clustered transcripts in gff format
-			">", os.path.join(pinfish_analysis, "{0}.pinfish6.collapse_partials.polised.clsgff.col".format(os.path.basename(file).split(".")[0])),  # output file
-			"2>>", os.path.join(pipeline_reports, "pinfish7_collapse_partials_polished-report.txt")])  # Directory where all reports reside
-			subprocess.run(pinfish_collapse_polished, shell=True)
-
-		collapsed_polised_gffs = [sum_file for sum_file in glob.glob(os.path.join(pinfish_analysis, "*.pinfish6.collapse_partials.polised.clsgff.col"))]
-		print("{0}  7/10 Pinfish - Generating the corrected transcriptome: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		for file in collapsed_polised_gffs:
-			pinfish_gffread = " ".join([
-			"gffread",  # Calling cluster_gff
-			"-g", refGenomeGRCh38,  # Input reference genome
-			"-w", os.path.join(pinfish_analysis, "{0}.pinfish7.collapsed_unique_isoforms.fasta".format(os.path.basename(file).split(".")[0])),  # output file
-			file,  # Clustered transcripts in gff format
-			"2>>", os.path.join(pipeline_reports, "pinfish7_gffread-report.txt")])  # Directory where all reports reside
-			subprocess.run(pinfish_gffread, shell=True)
-
-		print("{0}  8/10 Pinfish - Comparing the detected transcripts against the reference: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		pinfish_gffcompare = " ".join([
-		"gffcompare",  # Calling cluster_gff
-		"-r", refAnnot,  # Input reference annotation
-		"-R",  # for -r option, consider only the reference transcripts that overlap any of the input transfrags (Sn correction)
-		"-M",  # Discard (ignore) single-exon transfrags and reference transcripts
-		"-C",  # Discard matching and "contained" transfrags in the GTF output
-		"-K",  # For -C/-A/-X, do NOT discard any redundant transfrag matching a reference
-		"-o", os.path.join(pinfish_analysis, "pinfish8"),  # output dir
-		' '.join(collapsed_polised_gffs),  # Input gff files
-		"2>>", os.path.join(pipeline_reports, "pinfish8_gffcompare-report.txt")])  # Directory where all reports reside
-		subprocess.run(pinfish_gffcompare, shell=True)
-
-		# print("{0}  10/10 Pinfish - Generating statistics for the Pinfish analysis: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		### Removing unnecessary directories and files
+		os.system("rm -r {0}".format(temp))  
+		os.system("rm -r {0}".format("talon_tmp"))
 		return
 
 	def novel_transcripts_detection_flair(self, threads, chosen_samples):
@@ -678,25 +587,25 @@ class expression_matrix:
 		"2>>", os.path.join(pipeline_reports, "flair_quantify-report.txt")]) 
 		subprocess.run(flair_quantify, shell=True)
 
-		# # print("{0}  6/ FLAIR DE - Differential Expression analysis using DRIMSeq: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		# # flair_de = " ".join([
-		# # "python3 /home/stavros/playground/progs/flair/flair.py diffExp",  # Calling flair diffExp
-		# # "--threads", threads,  # Number of cores to use
-		# # "--counts_matrix", os.path.join(flair_analysis, "flair_expression_matrix.tsv"),  # Tab-delimited isoform count matrix from flair quantify module
-		# # "--out_dir", os.path.join(flair_analysis, "diffExp"),  # output file
-		# # # "2>>", os.path.join(pipeline_reports, "flair_de-report.txt")
-		# # ]) 
+		# print("{0}  6/ FLAIR DE - Differential Expression analysis using DRIMSeq: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		# flair_de = " ".join([
+		# "python3 /home/stavros/playground/progs/flair/flair.py diffExp",  # Calling flair diffExp
+		# "--threads", threads,  # Number of cores to use
+		# "--counts_matrix", os.path.join(flair_analysis, "flair_expression_matrix.tsv"),  # Tab-delimited isoform count matrix from flair quantify module
+		# "--out_dir", os.path.join(flair_analysis, "diffExp3"),  # output file
+		# "2>>", os.path.join(pipeline_reports, "flair_de-report.txt")]) 
+		# print(flair_de)
 		# # subprocess.run(flair_de, shell=True)
 
-		# # print("{0}  7/ FLAIR DS - Differential Splicing analysis using DRIMSeq: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		# # flair_ds = " ".join([
-		# # "python3 /home/stavros/playground/progs/flair/flair.py diffSplice",  # Calling flair diffSplice
-		# # "--threads", threads,  # Number of cores to use
-		# # "--counts_matrix", os.path.join(flair_analysis, "flair_expression_matrix.tsv"),  # Tab-delimited isoform count matrix from flair quantify module
-		# # # "--isoforms",,  # Isoforms in bed format
-		# # "--output", os.path.join(flair_analysis, "flair.diffsplice"),  # output file
-		# # "2>>", os.path.join(pipeline_reports, "flair_ds-report.txt")]) 
-		# # subprocess.run(flair_ds, shell=True)
+		# print("{0}  7/ FLAIR DS - Differential Splicing analysis using DRIMSeq: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
+		# flair_ds = " ".join([
+		# "python3 /home/stavros/playground/progs/flair/flair.py diffSplice",  # Calling flair diffSplice
+		# "--threads", threads,  # Number of cores to use
+		# "--counts_matrix", os.path.join(flair_analysis, "flair_expression_matrix.tsv"),  # Tab-delimited isoform count matrix from flair quantify module
+		# "--isoforms", os.path.join(flair_analysis,"flair.collapse.isoforms.psl"),  # Isoforms in bed format
+		# "--output", os.path.join(flair_analysis, "flair.diffsplice"),  # output file
+		# "2>>", os.path.join(pipeline_reports, "flair_ds-report.txt")]) 
+		# subprocess.run(flair_ds, shell=True)
 
 		# # print("{0}  8/ FLAIR predictProductivity - Annotated start codons to identify the longest ORF for each isoform for predicting isoform productivity: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
 		# # flair_predictProductivity = " ".join([
@@ -718,56 +627,6 @@ class expression_matrix:
 		# # os.path.join(flair_analysis, "flair.isoform_usage."),  # output file
 		# # "2>>", os.path.join(pipeline_reports, "flair_ds-report.txt")]) 
 		# # subprocess.run(flair_ds, shell=True)
-		return
-
-	def novel_transcripts_detection_sqanti2(self, threads, chosen_samples):
-		print("\n\t{0} ANNOTATION AND QUANTIFICATION USING SQANTI2".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		sqanti2_analysis = os.path.join(expression_analysis_dir, 'sqanti2_analysis')
-		SQANTI2_QC2_results = os.path.join(expression_analysis_dir, 'sqanti2_analysis/SQANTI2_QC2_results')
-		if not os.path.exists(sqanti2_analysis): os.makedirs(sqanti2_analysis)
-
-
-		print("{0}  1/ SQANTI2 - Collapse HQ isoform results to unique isoforms (based on genome alignment): in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		summary_files = [str(file_path) for file_path in Path(ont_data).glob('**/sequencing_summary.txt')]
-		for sum_file in [s for s in summary_files if os.path.dirname(s).endswith(chosen_samples)]:
-			fastq_file = glob.glob(os.path.join(os.path.dirname(str(sum_file)), "pass/*.fastq.gz"))[0]
-			fastq_file_decomp = fastq_file[:-3]
-			if not os.path.exists(fastq_file_decomp):
-				subprocess.run('pigz -d --keep {0}'.format(fastq_file), shell=True)
-			sample_id = os.path.basename(os.path.dirname(str(sum_file)))
-			sam_file = glob.glob(os.path.join(alignments_dir, "{0}*.sam".format(sample_id)))[0]
-			sqanti_collapse = " ".join([
-			"collapse_isoforms_by_sam.py",  # Calling collapse_isoforms_by_sam.py
-			"--fq",  # Input in fastq format
-			"--input", fastq_file_decomp,  # Input  fastq
-			"--sam", sam_file,  # Input sorted SAM file
-			"--prefix", os.path.join(sqanti2_analysis, "{0}".format(os.path.basename(sam_file).split(".")[0])),  # output file
-			"2>>", os.path.join(pipeline_reports, "sqanti1_collapse-report.txt")]) 
-			subprocess.run(sqanti_collapse, shell=True)
-			# subprocess.run("rm {0}".format(fastq_file_decomp), shell=True)
-
-		collapsed_unique_isoforms = [sum_file for sum_file in glob.glob(os.path.join(sqanti2_analysis, "*.collapsed.rep.fq"))]
-		print("{0}  / SQANTI2 - Converting sorted BAM files containing spliced alignments: in progress ..".format(datetime.now().strftime("%d.%m.%Y %H:%M")))
-		for file in collapsed_unique_isoforms:
-			sqanti_qc2 = " ".join([
-			"python3 /home/stavros/playground/progs/SQANTI2/sqanti_qc2.py",  # Calling sqanti_qc2.py
-			"--aligner_choice=minimap2",
-			"--cpus", threads,  # Number of cores to use
-			# "--cage_peak", CAGE_Peak_hg38_genome,  # FANTOM5 Cage Peak in BED format
-			# "--coverage", Intropolis_Junction_BED_file,  # Junction coverage files
-			"--polyA_motif_list", polyA_motif_list,  # Ranked list of polyA motifs
-			"--dir", SQANTI2_QC2_results,  # Directory for output files minimap2
-			file,  # Input collapsed unique isoforms
-			refAnnot,  # Reference annotation
-			refGenomeGRCh38,  # Reference genome
-			"2>>", os.path.join(pipeline_reports, "sqanti_qc2-report.txt")])  # Directory where all reports reside
-			subprocess.run(sqanti_qc2, shell=True)
-		return 
-
-	def clean_expression_dirs(self):
-		os.system('mv {0}/*report.txt {1}'.format(postAlignment_reports, reports_dir))
-		os.system('mv {0}/*tab.summary {1}'.format(postAlignment_reports, reports_dir))
-		os.system('mv {0}/*sum.tab {1}'.format(postAlignment_reports, reports_dir))
 		return
 
 class special_analysis:
@@ -878,9 +737,9 @@ def summary():
 	if not os.path.exists(individual_postal_reports): os.makedirs(individual_postal_reports)
 
 	# Moving files to "qc_reports" directory
-	# os.system('mv {0}/*_qc.pk {1}'.format(postanalysis_dir, qc_reports))
-	os.system('mv {0}/*.txt {1}'.format(postanalysis_dir, individual_postal_reports))
-	os.system('mv {0}/*.fragSize {1}'.format(postanalysis_dir, individual_postal_reports))
+	# os.system('mv {0}/*_qc.pk {1}'.format(postAlignment_reports, qc_reports))
+	os.system('mv {0}/*.txt {1}'.format(postAlignment_reports, individual_postal_reports))
+	os.system('mv {0}/*.fragSize {1}'.format(postAlignment_reports, individual_postal_reports))
 	return
 
 
@@ -890,22 +749,22 @@ def main():
 	# chosen_samples = ("Tumour_1", "NonTransf_1")
 
 
-	summary_files = [str(file_path) for file_path in Path(ont_data).glob('**/sequencing_summary.txt')]
-	num_of_samples = len(summary_files)
+	# summary_files = [str(file_path) for file_path in Path(ont_data).glob('**/sequencing_summary.txt')]
+	# num_of_samples = len(summary_files)
 
-	for i, sum_file in enumerate([s for s in summary_files if os.path.dirname(s).endswith(chosen_samples)], 1):
-		raw_data_dir = os.path.dirname(str(sum_file))
-		sample_id = os.path.basename(raw_data_dir)
+	# for i, sum_file in enumerate([s for s in summary_files if os.path.dirname(s).endswith(chosen_samples)], 1):
+	# 	raw_data_dir = os.path.dirname(str(sum_file))
+	# 	sample_id = os.path.basename(raw_data_dir)
 
-		quality_control(i, sum_file, sample_id, raw_data_dir)
+	# 	quality_control(i, sum_file, sample_id, raw_data_dir)
 
-		alignment_against_ref(i, sample_id, raw_data_dir)
+	# 	alignment_against_ref(i, sample_id, raw_data_dir)
 
-	mapping_qc()
+	# mapping_qc()
 
 	expression_matrix(args.threads, chosen_samples)
 
-	summary()
+	# summary()
 
 	print('\t--- The pipeline finisded after {0} ---'.format(datetime.now() - startTime))
 if __name__ == "__main__": main()
